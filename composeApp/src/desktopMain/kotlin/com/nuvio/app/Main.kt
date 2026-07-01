@@ -5,14 +5,20 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.features.player.PlatformPlayerSurface
 import com.nuvio.app.features.player.desktop.DesktopAppFullscreenController
+import com.nuvio.app.features.player.desktop.DesktopHostOs
+import com.nuvio.app.features.player.desktop.DesktopWindowGeometry
+import com.nuvio.app.features.player.desktop.DesktopWindowModeStorage
 import com.nuvio.app.features.player.desktop.applyNativeDesktopWindowChrome
 import com.nuvio.app.features.player.desktop.installDesktopAppFullscreenShortcuts
 import com.nuvio.app.features.player.desktop.preloadNativePlayerBridgeAsync
@@ -30,11 +36,25 @@ fun main() {
 
     application {
         val smokePlayerUrl = (
-            System.getProperty("nuvio.desktop.smokePlayerUrl")
-                ?: System.getenv("NUVIO_DESKTOP_SMOKE_PLAYER_URL")
-            )
+                System.getProperty("nuvio.desktop.smokePlayerUrl")
+                    ?: System.getenv("NUVIO_DESKTOP_SMOKE_PLAYER_URL")
+                )
             ?.takeIf { it.isNotBlank() }
-        val windowState = rememberWindowState(width = 1280.dp, height = 820.dp)
+        val wasFullscreenOnLastExit = remember { DesktopWindowModeStorage.loadWasFullscreen() }
+        val savedGeometry = remember { DesktopWindowModeStorage.loadWindowedGeometry() }
+        val windowState = rememberWindowState(
+            width = savedGeometry?.width?.dp ?: 1280.dp,
+            height = savedGeometry?.height?.dp ?: 820.dp,
+            position = savedGeometry?.let { WindowPosition.Absolute(x = it.x.dp, y = it.y.dp) }
+                ?: WindowPosition.PlatformDefault,
+            // Windows fullscreen is emulated natively (see DesktopAppFullscreenController)
+            // rather than driven by WindowPlacement, so it's restored separately below.
+            placement = if (wasFullscreenOnLastExit && DesktopHostOs.current != DesktopHostOs.WINDOWS) {
+                WindowPlacement.Fullscreen
+            } else {
+                WindowPlacement.Floating
+            },
+        )
         val fullscreenController = remember { DesktopAppFullscreenController() }
 
         Window(
@@ -51,17 +71,50 @@ fun main() {
             }
             LaunchedEffect(window) {
                 applyNativeDesktopWindowChrome(window)
+                // Windows fullscreen is emulated natively and isn't reflected by
+                // WindowPlacement, so it must be re-applied once the window peer exists.
+                fullscreenController.applyRestoredFullscreenState(window, windowState, wasFullscreenOnLastExit)
+            }
+            LaunchedEffect(windowState) {
+                // Covers OS-driven placement changes too (e.g. the native macOS
+                // green-button fullscreen toggle), not just our own shortcuts.
+                if (DesktopHostOs.current != DesktopHostOs.WINDOWS) {
+                    snapshotFlow { windowState.placement }
+                        .collect { placement ->
+                            DesktopWindowModeStorage.saveWasFullscreen(placement == WindowPlacement.Fullscreen)
+                        }
+                }
+            }
+            LaunchedEffect(windowState) {
+                // Only persist geometry while windowed: fullscreen/native-Windows-fullscreen
+                // coordinates aren't a meaningful "windowed position" to restore later.
+                snapshotFlow { Triple(windowState.placement, windowState.position, windowState.size) }
+                    .collect { (placement, position, size) ->
+                        if (placement == WindowPlacement.Floating && position.isSpecified) {
+                            DesktopWindowModeStorage.saveWindowedGeometry(
+                                DesktopWindowGeometry(
+                                    x = position.x.value,
+                                    y = position.y.value,
+                                    width = size.width.value,
+                                    height = size.height.value,
+                                ),
+                            )
+                        }
+                    }
             }
             DisposableEffect(window, windowState) {
                 val unregisterFullscreenToggle = registerDesktopAppFullscreenToggle(
                     handler = { targetWindow ->
                         if (targetWindow == null || targetWindow === window) {
                             fullscreenController.toggle(window, windowState)
+                            DesktopWindowModeStorage.saveWasFullscreen(
+                                fullscreenController.isFullscreen(window, windowState),
+                            )
                         }
                     },
                     isFullscreen = { targetWindow ->
                         (targetWindow == null || targetWindow === window) &&
-                            fullscreenController.isFullscreen(window, windowState)
+                                fullscreenController.isFullscreen(window, windowState)
                     },
                 )
                 val uninstallFullscreenShortcuts = installDesktopAppFullscreenShortcuts(window)
