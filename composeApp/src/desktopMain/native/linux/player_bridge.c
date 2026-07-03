@@ -496,10 +496,13 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
     (*env)->ReleaseStringUTFChars(env, jhwdec, hwdec);
 
     // HTTP headers arrive as "Key: Value" lines; mpv wants a comma-separated
-    // list option. User-Agent gets its own option when present.
+    // list option, so commas and backslashes inside values must be escaped
+    // (matches the macOS/Windows bridges, upstream PR #144). User-Agent gets
+    // its own option when present.
     jsize headerCount = jheaderLines ? (*env)->GetArrayLength(env, jheaderLines) : 0;
     if (headerCount > 0) {
         size_t cap = 4096;
+        size_t len = 0;
         char *joined = calloc(1, cap);
         for (jsize i = 0; i < headerCount; i++) {
             jstring jline = (jstring)(*env)->GetObjectArrayElement(env, jheaderLines, i);
@@ -509,18 +512,22 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
                 while (*ua == ' ') ua++;
                 api.set_option_string(p->mpv, "user-agent", ua);
             } else {
-                size_t need = strlen(joined) + strlen(line) + 2;
+                size_t need = len + strlen(line) * 2 + 2;
                 if (need > cap) {
                     cap = need * 2;
                     joined = realloc(joined, cap);
                 }
-                if (joined[0]) strcat(joined, ",");
-                strcat(joined, line);
+                if (len > 0) joined[len++] = ',';
+                for (const char *c = line; *c; c++) {
+                    if (*c == '\\' || *c == ',') joined[len++] = '\\';
+                    joined[len++] = *c;
+                }
+                joined[len] = '\0';
             }
             (*env)->ReleaseStringUTFChars(env, jline, line);
             (*env)->DeleteLocalRef(env, jline);
         }
-        if (joined[0]) api.set_option_string(p->mpv, "http-header-fields", joined);
+        if (len > 0) api.set_option_string(p->mpv, "http-header-fields", joined);
         free(joined);
     }
 
