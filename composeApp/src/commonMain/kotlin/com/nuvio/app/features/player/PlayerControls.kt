@@ -159,7 +159,13 @@ internal fun PlayerControlsShell(
                     .padding(
                         start = metrics.horizontalPadding,
                         end = metrics.horizontalPadding,
-                        top = metrics.verticalPadding / 4,
+                        // Desktop has no status-bar inset, so the quarter padding
+                        // alone would glue the top bar to the window edge.
+                        top = if (com.nuvio.app.isDesktop) {
+                            metrics.verticalPadding
+                        } else {
+                            metrics.verticalPadding / 4
+                        },
                     ),
             )
 

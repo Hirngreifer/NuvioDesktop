@@ -846,6 +846,70 @@ if (isWindowsHost) {
     }
 }
 
+// --- Linux player bridge -----------------------------------------------------
+// Renders through libmpv's software render API into Compose (no native window,
+// no WebView overlay), so the only build inputs are a C compiler and the JNI
+// headers. libmpv itself is dlopen'ed at runtime.
+val isLinuxHost = !isMacHost && !isWindowsHost
+val linuxPlayerBridgeSourceFile = layout.projectDirectory.file("src/desktopMain/native/linux/player_bridge.c").asFile
+val linuxPlayerBridgeOutputFile = layout.buildDirectory.file("native/linux/libplayer_bridge.so").get().asFile
+val linuxPlayerBridgeJavaHome = providers.systemProperty("java.home").get()
+
+val buildLinuxPlayerBridge = tasks.register<Exec>("buildLinuxPlayerBridge") {
+    enabled = isLinuxHost
+    inputs.file(linuxPlayerBridgeSourceFile)
+    outputs.file(linuxPlayerBridgeOutputFile)
+    val outputFile = linuxPlayerBridgeOutputFile
+    doFirst { outputFile.parentFile.mkdirs() }
+    commandLine(
+        "gcc",
+        "-shared",
+        "-fPIC",
+        "-O2",
+        "-Wall",
+        linuxPlayerBridgeSourceFile.absolutePath,
+        "-o",
+        linuxPlayerBridgeOutputFile.absolutePath,
+        "-I$linuxPlayerBridgeJavaHome/include",
+        "-I$linuxPlayerBridgeJavaHome/include/linux",
+        "-ldl",
+        "-lpthread",
+    )
+}
+
+tasks.withType<Jar>().configureEach {
+    if (isLinuxHost && name == "desktopJar") {
+        dependsOn(buildLinuxPlayerBridge)
+        from(linuxPlayerBridgeOutputFile) {
+            into("native/linux")
+        }
+    }
+}
+
+if (isLinuxHost) {
+    val desktopNativePlayerTasks = setOf(
+        "run",
+        "runRelease",
+        "desktopRun",
+        "runDistributable",
+        "runReleaseDistributable",
+        "createDistributable",
+        "createReleaseDistributable",
+        "createRuntimeImage",
+        "package",
+        "packageDistributionForCurrentOS",
+        "packageDeb",
+        "packageUberJarForCurrentOS",
+        "packageReleaseDistributionForCurrentOS",
+        "packageReleaseDeb",
+        "packageReleaseUberJarForCurrentOS",
+    )
+    tasks.matching { it.name in desktopNativePlayerTasks }.configureEach {
+        dependsOn(buildLinuxPlayerBridge)
+    }
+}
+// -----------------------------------------------------------------------------
+
 tasks.withType<KotlinCompilationTask<*>>().configureEach {
     dependsOn(generateRuntimeConfigs)
 }

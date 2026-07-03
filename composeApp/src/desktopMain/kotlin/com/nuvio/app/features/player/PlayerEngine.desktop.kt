@@ -50,6 +50,24 @@ actual fun PlatformPlayerSurface(
     onSnapshot: (PlayerPlaybackSnapshot) -> Unit,
     onError: (String?) -> Unit,
 ) {
+    if (DesktopHostOs.current == DesktopHostOs.LINUX) {
+        // Linux renders through libmpv's software render API straight into
+        // Compose; the shared Compose PlayerControls provide the UI, so the
+        // native controls overlay (useNativeController) does not apply here.
+        com.nuvio.app.features.player.desktop.LinuxComposePlayerSurface(
+            sourceUrl = sourceUrl,
+            sourceHeaders = sourceHeaders,
+            modifier = modifier,
+            playWhenReady = playWhenReady,
+            resizeMode = resizeMode,
+            initialPositionMs = initialPositionMs,
+            onControllerReady = onControllerReady,
+            onSnapshot = onSnapshot,
+            onError = onError,
+        )
+        return
+    }
+
     if (DesktopHostOs.current == DesktopHostOs.MACOS || DesktopHostOs.current == DesktopHostOs.WINDOWS) {
         NativePlayerSurface(
             sourceUrl = sourceUrl,
