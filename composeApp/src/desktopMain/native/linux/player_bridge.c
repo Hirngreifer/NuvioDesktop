@@ -66,13 +66,28 @@ typedef struct mpv_render_param {
 enum {
     MPV_RENDER_PARAM_INVALID = 0,
     MPV_RENDER_PARAM_API_TYPE = 1,
-    // Values verified against mpv render.h (libmpv 2.x stable ABI).
+    // Values verified against mpv render.h / render_gl.h (libmpv 2.x stable ABI).
+    MPV_RENDER_PARAM_OPENGL_INIT_PARAMS = 2,
+    MPV_RENDER_PARAM_OPENGL_FBO = 3,
+    MPV_RENDER_PARAM_FLIP_Y = 4,
     MPV_RENDER_PARAM_SW_SIZE = 17,
     MPV_RENDER_PARAM_SW_FORMAT = 18,
     MPV_RENDER_PARAM_SW_STRIDE = 19,
     MPV_RENDER_PARAM_SW_POINTER = 20,
 };
 
+typedef struct mpv_opengl_init_params {
+    void *(*get_proc_address)(void *ctx, const char *name);
+    void *get_proc_address_ctx;
+} mpv_opengl_init_params;
+
+typedef struct mpv_opengl_fbo {
+    int fbo;
+    int w, h;
+    int internal_format;
+} mpv_opengl_fbo;
+
+#define MPV_RENDER_API_TYPE_OPENGL "opengl"
 #define MPV_RENDER_API_TYPE_SW "sw"
 #define MPV_RENDER_UPDATE_FRAME 1
 
@@ -144,14 +159,256 @@ static int load_mpv_api(void) {
     return 1;
 }
 
+// ---------------------------------------------------------------------------
+// Offscreen OpenGL backend (EGL pbuffer + FBO + glReadPixels).
+//
+// mpv does scaling/tone-mapping on the GPU and we read the finished frame
+// back into the caller's buffer — same buffer contract as the software path,
+// but fast enough for 4K60. Falls back to the software renderer whenever any
+// step fails (no EGL, no GL, headless CI, ...).
+// EGL/GL constants below are from the stable Khronos ABI.
+
+typedef void *EGLDisplay;
+typedef void *EGLConfig;
+typedef void *EGLContext;
+typedef void *EGLSurface;
+typedef int EGLint;
+typedef unsigned EGLBoolean;
+typedef unsigned GLenum;
+typedef unsigned GLuint;
+typedef int GLint;
+typedef int GLsizei;
+
+#define EGL_DEFAULT_DISPLAY ((void *)0)
+#define EGL_NO_SURFACE ((void *)0)
+#define EGL_SURFACE_TYPE 0x3033
+#define EGL_PBUFFER_BIT 0x0001
+#define EGL_RENDERABLE_TYPE 0x3040
+#define EGL_OPENGL_BIT 0x0008
+#define EGL_NONE 0x3038
+#define EGL_WIDTH 0x3057
+#define EGL_HEIGHT 0x3056
+#define EGL_OPENGL_API 0x30A2
+#define EGL_CONTEXT_MAJOR_VERSION 0x3098
+#define EGL_CONTEXT_MINOR_VERSION 0x30FB
+#define EGL_CONTEXT_OPENGL_PROFILE_MASK 0x30FD
+#define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT 0x00000001
+
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_RGBA8 0x8058
+#define GL_RGBA 0x1908
+#define GL_BGRA 0x80E1
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_PACK_ALIGNMENT 0x0D05
+#define GL_LINEAR 0x2601
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+
+typedef struct {
+    void *egl_lib;
+    void *gl_lib;
+    EGLDisplay dpy;
+    EGLContext ctx;
+    EGLSurface surf;
+    GLuint fbo;
+    GLuint tex;
+    int fbo_w, fbo_h;
+
+    EGLDisplay (*GetDisplay)(void *);
+    EGLBoolean (*Initialize)(EGLDisplay, EGLint *, EGLint *);
+    EGLBoolean (*BindAPI)(unsigned);
+    EGLBoolean (*ChooseConfig)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
+    EGLSurface (*CreatePbufferSurface)(EGLDisplay, EGLConfig, const EGLint *);
+    EGLContext (*CreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
+    EGLBoolean (*MakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+    void *(*GetProcAddress)(const char *);
+    EGLBoolean (*DestroyContext)(EGLDisplay, EGLContext);
+    EGLBoolean (*DestroySurface)(EGLDisplay, EGLSurface);
+
+    void (*GenTextures)(GLsizei, GLuint *);
+    void (*BindTexture)(GLenum, GLuint);
+    void (*TexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *);
+    void (*TexParameteri)(GLenum, GLenum, GLint);
+    void (*GenFramebuffers)(GLsizei, GLuint *);
+    void (*BindFramebuffer)(GLenum, GLuint);
+    void (*FramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
+    GLenum (*CheckFramebufferStatus)(GLenum);
+    void (*ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *);
+    void (*PixelStorei)(GLenum, GLint);
+    void (*DeleteFramebuffers)(GLsizei, const GLuint *);
+    void (*DeleteTextures)(GLsizei, const GLuint *);
+} GlBackend;
+
+enum {
+    BACKEND_PENDING = 0,
+    BACKEND_GL = 1,
+    BACKEND_SW = 2,
+};
+
 typedef struct {
     mpv_handle *mpv;
     mpv_render_context *rctx;
     pthread_mutex_t state_mutex;
+    int backend;        // BACKEND_*; render context is created lazily on the
+                        // frame thread because the GL context must be current
+                        // on the thread that creates and uses it
+    GlBackend gl;
+    char *pending_url;  // loadfile is deferred until the render context
+                        // exists — mpv drops video that starts without one
     int ended;          // END_FILE with reason EOF
     int file_loaded;    // FILE_LOADED seen
     char error_message[512];
 } Player;
+
+static int mpv_render_context_create_checked(Player *p, mpv_render_param *params) {
+    int r = api.render_context_create(&p->rctx, p->mpv, params);
+    if (r < 0) p->rctx = NULL;
+    return r < 0 ? -1 : 0;
+}
+
+static void *gl_resolve(void *ctx, const char *name) {
+    GlBackend *gl = (GlBackend *)ctx;
+    void *fn = gl->GetProcAddress ? gl->GetProcAddress(name) : NULL;
+    if (!fn && gl->gl_lib) fn = dlsym(gl->gl_lib, name);
+    return fn;
+}
+
+static int gl_backend_init(Player *p) {
+    GlBackend *gl = &p->gl;
+    const char *override = getenv("NUVIO_LINUX_RENDER");
+    if (override && strcmp(override, "sw") == 0) return 0;
+
+    gl->egl_lib = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+    gl->gl_lib = dlopen("libGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+    if (!gl->egl_lib) return 0;
+
+#define EGL_SYM(field, name) \
+    do { *(void **)(&gl->field) = dlsym(gl->egl_lib, name); if (!gl->field) return 0; } while (0)
+    EGL_SYM(GetDisplay, "eglGetDisplay");
+    EGL_SYM(Initialize, "eglInitialize");
+    EGL_SYM(BindAPI, "eglBindAPI");
+    EGL_SYM(ChooseConfig, "eglChooseConfig");
+    EGL_SYM(CreatePbufferSurface, "eglCreatePbufferSurface");
+    EGL_SYM(CreateContext, "eglCreateContext");
+    EGL_SYM(MakeCurrent, "eglMakeCurrent");
+    EGL_SYM(GetProcAddress, "eglGetProcAddress");
+    EGL_SYM(DestroyContext, "eglDestroyContext");
+    EGL_SYM(DestroySurface, "eglDestroySurface");
+#undef EGL_SYM
+
+    gl->dpy = gl->GetDisplay(EGL_DEFAULT_DISPLAY);
+    if (!gl->dpy) return 0;
+    if (!gl->Initialize(gl->dpy, NULL, NULL)) return 0;
+    if (!gl->BindAPI(EGL_OPENGL_API)) return 0;
+
+    const EGLint cfg_attribs[] = {
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+        EGL_NONE,
+    };
+    EGLConfig config = NULL;
+    EGLint num_configs = 0;
+    if (!gl->ChooseConfig(gl->dpy, cfg_attribs, &config, 1, &num_configs) || num_configs < 1) return 0;
+
+    const EGLint pbuf_attribs[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+    gl->surf = gl->CreatePbufferSurface(gl->dpy, config, pbuf_attribs);
+    if (!gl->surf) return 0;
+
+    // A legacy/compat context makes mpv's GLSL shaders fail to compile
+    // (grey frames); request a 3.3 core profile explicitly.
+    const EGLint ctx_attribs[] = {
+        EGL_CONTEXT_MAJOR_VERSION, 3,
+        EGL_CONTEXT_MINOR_VERSION, 3,
+        EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+        EGL_NONE,
+    };
+    gl->ctx = gl->CreateContext(gl->dpy, config, NULL, ctx_attribs);
+    if (!gl->ctx) return 0;
+    if (!gl->MakeCurrent(gl->dpy, gl->surf, gl->surf, gl->ctx)) return 0;
+
+#define GL_SYM(field, name) \
+    do { *(void **)(&gl->field) = gl_resolve(gl, name); if (!gl->field) return 0; } while (0)
+    GL_SYM(GenTextures, "glGenTextures");
+    GL_SYM(BindTexture, "glBindTexture");
+    GL_SYM(TexImage2D, "glTexImage2D");
+    GL_SYM(TexParameteri, "glTexParameteri");
+    GL_SYM(GenFramebuffers, "glGenFramebuffers");
+    GL_SYM(BindFramebuffer, "glBindFramebuffer");
+    GL_SYM(FramebufferTexture2D, "glFramebufferTexture2D");
+    GL_SYM(CheckFramebufferStatus, "glCheckFramebufferStatus");
+    GL_SYM(ReadPixels, "glReadPixels");
+    GL_SYM(PixelStorei, "glPixelStorei");
+    GL_SYM(DeleteFramebuffers, "glDeleteFramebuffers");
+    GL_SYM(DeleteTextures, "glDeleteTextures");
+#undef GL_SYM
+    return 1;
+}
+
+static int gl_ensure_fbo(GlBackend *gl, int w, int h) {
+    if (gl->fbo && gl->fbo_w == w && gl->fbo_h == h) return 1;
+    if (gl->fbo) {
+        gl->DeleteFramebuffers(1, &gl->fbo);
+        gl->DeleteTextures(1, &gl->tex);
+        gl->fbo = 0;
+        gl->tex = 0;
+    }
+    gl->GenTextures(1, &gl->tex);
+    gl->BindTexture(GL_TEXTURE_2D, gl->tex);
+    gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl->GenFramebuffers(1, &gl->fbo);
+    gl->BindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
+    gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl->tex, 0);
+    if (gl->CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return 0;
+    gl->fbo_w = w;
+    gl->fbo_h = h;
+    return 1;
+}
+
+// Creates the mpv render context on the calling (frame) thread. Tries the
+// OpenGL backend first, falls back to the software renderer.
+static void init_render_backend(Player *p) {
+    // mpv generates GLSL shaders with printf-formatted floats on this thread.
+    // The JVM re-applies the system locale after create() ran, so a German
+    // locale turns vec2(1920.0, ...) into vec2(1920,000000, ...) and every
+    // shader fails to compile (uniformly grey frames). Pin a C numeric locale
+    // to this thread; it outlives any process-wide setlocale() calls.
+    locale_t numeric_c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    if (numeric_c) uselocale(numeric_c);
+    setlocale(LC_NUMERIC, "C");
+    if (gl_backend_init(p)) {
+        mpv_opengl_init_params gl_init = {
+            .get_proc_address = gl_resolve,
+            .get_proc_address_ctx = &p->gl,
+        };
+        mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_OPENGL},
+            {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init},
+            {MPV_RENDER_PARAM_INVALID, NULL},
+        };
+        if (mpv_render_context_create_checked(p, params) == 0) {
+            p->backend = BACKEND_GL;
+            fprintf(stderr, "nuvio-linux-bridge: using OpenGL rendering backend\n");
+            return;
+        }
+    }
+
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_SW},
+        {MPV_RENDER_PARAM_INVALID, NULL},
+    };
+    if (mpv_render_context_create_checked(p, params) == 0) {
+        p->backend = BACKEND_SW;
+        fprintf(stderr, "nuvio-linux-bridge: using software rendering backend\n");
+    } else {
+        p->backend = BACKEND_SW; // keep render() returning -1 via NULL rctx
+        fprintf(stderr, "nuvio-linux-bridge: render context creation failed\n");
+    }
+}
 
 // Drains the mpv event queue and folds interesting events into player state.
 static void drain_events(Player *p) {
@@ -223,7 +480,12 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
     api.set_option_string(p->mpv, "idle", "yes");
     api.set_option_string(p->mpv, "input-default-bindings", "no");
     api.set_option_string(p->mpv, "osc", "no");
-    api.set_option_string(p->mpv, "terminal", "no");
+    if (getenv("NUVIO_MPV_VERBOSE")) {
+        api.set_option_string(p->mpv, "terminal", "yes");
+        api.set_option_string(p->mpv, "msg-level", "all=v");
+    } else {
+        api.set_option_string(p->mpv, "terminal", "no");
+    }
     // Network resilience for streaming sources
     api.set_option_string(p->mpv, "cache", "yes");
     api.set_option_string(p->mpv, "demuxer-max-bytes", "128MiB");
@@ -275,19 +537,12 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
         return 0;
     }
 
-    mpv_render_param cparams[] = {
-        {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_SW},
-        {MPV_RENDER_PARAM_INVALID, NULL},
-    };
-    if (api.render_context_create(&p->rctx, p->mpv, cparams) < 0) {
-        api.terminate_destroy(p->mpv);
-        free(p);
-        return 0;
-    }
+    // The render context is created lazily by the first render() call: the
+    // OpenGL context must be current on the thread that creates and uses it,
+    // and only the frame thread qualifies.
 
     const char *url = (*env)->GetStringUTFChars(env, jurl, NULL);
-    const char *cmd[] = {"loadfile", url, NULL};
-    api.command(p->mpv, cmd);
+    p->pending_url = strdup(url);
     (*env)->ReleaseStringUTFChars(env, jurl, url);
     return (jlong)(intptr_t)p;
 }
@@ -295,17 +550,40 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
 BRIDGE_FN(void, dispose)(JNIEnv *env, jclass cls, jlong handle) {
     Player *p = player_from_handle(handle);
     if (!p) return;
+    GlBackend *gl = &p->gl;
+    if (p->backend == BACKEND_GL && gl->ctx) {
+        // The frame thread has stopped by the time dispose runs, so it is
+        // legal to make the context current here for teardown.
+        gl->MakeCurrent(gl->dpy, gl->surf, gl->surf, gl->ctx);
+    }
     if (p->rctx) api.render_context_free(p->rctx);
+    if (p->backend == BACKEND_GL && gl->ctx) {
+        if (gl->fbo) gl->DeleteFramebuffers(1, &gl->fbo);
+        if (gl->tex) gl->DeleteTextures(1, &gl->tex);
+        gl->MakeCurrent(gl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, NULL);
+        gl->DestroyContext(gl->dpy, gl->ctx);
+        if (gl->surf) gl->DestroySurface(gl->dpy, gl->surf);
+    }
     if (p->mpv) api.terminate_destroy(p->mpv);
+    free(p->pending_url);
     pthread_mutex_destroy(&p->state_mutex);
     free(p);
 }
 
 // Renders the newest video frame into the direct buffer (BGRA, stride=w*4).
 // Returns 1 if a new frame was written, 0 if nothing changed, -1 on error.
+// Must always be called from the same (frame) thread.
 BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jint w, jint h) {
     Player *p = player_from_handle(handle);
-    if (!p || !p->rctx) return -1;
+    if (!p) return -1;
+    if (p->backend == BACKEND_PENDING) init_render_backend(p);
+    if (!p->rctx) return -1;
+    if (p->pending_url) {
+        const char *cmd[] = {"loadfile", p->pending_url, NULL};
+        api.command(p->mpv, cmd);
+        free(p->pending_url);
+        p->pending_url = NULL;
+    }
     drain_events(p);
 
     uint64_t flags = api.render_context_update(p->rctx);
@@ -313,6 +591,28 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
 
     void *pixels = (*env)->GetDirectBufferAddress(env, jbuf);
     if (!pixels) return -1;
+
+    if (p->backend == BACKEND_GL) {
+        GlBackend *gl = &p->gl;
+        if (!gl->MakeCurrent(gl->dpy, gl->surf, gl->surf, gl->ctx)) return -1;
+        if (!gl_ensure_fbo(gl, w, h)) return -1;
+        mpv_opengl_fbo fbo = { .fbo = (int)gl->fbo, .w = w, .h = h, .internal_format = 0 };
+        // glReadPixels returns rows bottom-up; mpv's default FBO orientation
+        // already compensates for that, so no flip (verified with a
+        // white-top/black-bottom test video against the software renderer).
+        int flip_y = 0;
+        mpv_render_param rparams[] = {
+            {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+            {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+            {MPV_RENDER_PARAM_INVALID, NULL},
+        };
+        if (api.render_context_render(p->rctx, rparams) < 0) return -1;
+        gl->BindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
+        gl->PixelStorei(GL_PACK_ALIGNMENT, 4);
+        gl->ReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+        return 1;
+    }
+
     int size[2] = {w, h};
     size_t stride = (size_t)w * 4;
     mpv_render_param rparams[] = {
