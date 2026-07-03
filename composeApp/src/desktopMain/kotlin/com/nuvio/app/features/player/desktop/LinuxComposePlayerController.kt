@@ -97,11 +97,26 @@ internal class LinuxComposePlayerController : PlayerEngineController {
         }
     }
 
+    // Native teardown includes the EGL/GL context teardown, which must never
+    // run on the UI thread: eglMakeCurrent there would steal Skiko's GL
+    // context from under Compose and permanently black out the whole app.
+    // Handles are therefore queued and disposed on the frame thread, which
+    // owns the render context anyway.
+    private val pendingDisposals = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+
     fun disposePlayer() {
         val current = handle
         handle = 0L
         if (current != 0L) {
-            runCatching { LinuxPlayerBridge.dispose(current) }
+            pendingDisposals.add(current)
+        }
+    }
+
+    /** Must be called from the frame thread (during the loop and after it ends). */
+    fun drainDisposals() {
+        while (true) {
+            val stale = pendingDisposals.poll() ?: break
+            runCatching { LinuxPlayerBridge.dispose(stale) }
         }
     }
 

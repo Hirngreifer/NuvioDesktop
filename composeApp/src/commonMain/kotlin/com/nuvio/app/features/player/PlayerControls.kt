@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.ui.AppIconResource
+import com.nuvio.app.core.ui.FullscreenActionButton
 import com.nuvio.app.core.ui.NuvioBackButton
 import com.nuvio.app.core.ui.appIconPainter
 import com.nuvio.app.core.ui.nuvioTypeScale
@@ -333,6 +334,14 @@ private fun PlayerHeader(
                             onClick = onOpenInExternalPlayer,
                         )
                     }
+                    // Renders nothing on platforms without a fullscreen action
+                    // (isFullscreenActionSupported gates internally).
+                    FullscreenActionButton(
+                        buttonSize = metrics.headerIconSize + 16.dp,
+                        iconSize = metrics.headerIconSize,
+                        containerColor = Color.Black.copy(alpha = 0.35f),
+                        contentColor = Color.White,
+                    )
                     PlayerHeaderIconButton(
                         icon = if (isLocked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
                         contentDescription = if (isLocked) {

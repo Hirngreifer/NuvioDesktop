@@ -82,6 +82,12 @@ internal fun LinuxComposePlayerSurface(
         val thread = Thread {
             var firstFrameLogged = false
             while (running.get()) {
+                // Stale players (re-attach, retry) are torn down here: the
+                // teardown makes the EGL context current, which must never
+                // happen on the UI thread (it would steal Skiko's context and
+                // black out the app), and running it on the render thread also
+                // serializes it against render() calls.
+                controller.drainDisposals()
                 val handle = controller.currentHandle
                 if (handle == 0L || !frameStore.ensureCapacity()) {
                     Thread.sleep(10)
@@ -98,15 +104,18 @@ internal fun LinuxComposePlayerSurface(
                     Thread.sleep(2)
                 }
             }
+            // Final teardown stays on this thread; mpv teardown of a network
+            // stream can block for seconds and must not stall the UI.
+            controller.disposePlayer()
+            controller.drainDisposals()
         }.apply {
             name = "nuvio-linux-player-frames"
             isDaemon = true
             start()
         }
         onDispose {
+            // Only signal the thread; never join or dispose on the UI thread.
             running.set(false)
-            runCatching { thread.join(500) }
-            controller.disposePlayer()
         }
     }
 
