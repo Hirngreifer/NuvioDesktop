@@ -61,6 +61,7 @@ actual fun PlatformPlayerSurface(
             playWhenReady = playWhenReady,
             resizeMode = resizeMode,
             initialPositionMs = initialPositionMs,
+            onPlayerControlsEvent = onPlayerControlsEvent,
             onControllerReady = onControllerReady,
             onSnapshot = onSnapshot,
             onError = onError,

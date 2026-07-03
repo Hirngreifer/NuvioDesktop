@@ -14,6 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.player.PlayerEngineController
@@ -46,6 +49,7 @@ internal fun LinuxComposePlayerSurface(
     playWhenReady: Boolean,
     resizeMode: PlayerResizeMode,
     initialPositionMs: Long,
+    onPlayerControlsEvent: (String, Double) -> Boolean,
     onControllerReady: (PlayerEngineController) -> Unit,
     onSnapshot: (PlayerPlaybackSnapshot) -> Unit,
     onError: (String?) -> Unit,
@@ -118,7 +122,26 @@ internal fun LinuxComposePlayerSurface(
         modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onSizeChanged { frameStore.requestSize(it.width, it.height) },
+            .onSizeChanged { frameStore.requestSize(it.width, it.height) }
+            // On Windows/macOS the native HTML overlay reveals the controls on
+            // mouse movement ("cursorActivity"); here the Compose surface has
+            // to report it itself. Observed on the Initial pass so the gesture
+            // handlers above are unaffected; throttled to avoid state churn.
+            .pointerInput(Unit) {
+                var lastReportedAt = 0L
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.type == PointerEventType.Move) {
+                            val now = System.currentTimeMillis()
+                            if (now - lastReportedAt >= 250) {
+                                lastReportedAt = now
+                                onPlayerControlsEvent("cursorActivity", 0.0)
+                            }
+                        }
+                    }
+                }
+            },
     ) {
         @Suppress("UNUSED_EXPRESSION")
         frameTick // read state so every frame swap invalidates the canvas
