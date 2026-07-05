@@ -923,10 +923,9 @@ public:
         bool paused = isPaused();
         bool eofReached = isEnded();
         bool idle = flagProperty("core-idle", true);
-        bool seeking = flagProperty("seeking", false);
         bool bufferingCache = flagProperty("paused-for-cache", false);
         bool fileReady = doubleProperty("duration", 0.0) > 0.0 || int64Property("track-list/count", 0) > 0;
-        return !fileReady || (idle && !paused && !eofReached) || seeking || bufferingCache;
+        return !fileReady || (idle && !paused && !eofReached) || bufferingCache;
     }
 
     bool isEnded() {
@@ -1352,11 +1351,12 @@ private:
             setMpvOptionStringLocked("input-vo-keyboard", "no");
             setMpvOptionStringLocked("keep-open", "yes");
             setMpvOptionStringLocked("vo", "gpu-next");
-            setMpvOptionStringLocked("gpu-api", "d3d11");
             if (nvidiaRtxSuperResolutionEnabled) {
+                setMpvOptionStringLocked("gpu-api", "d3d11");
                 setMpvOptionStringLocked("hwdec", "d3d11va");
                 setMpvOptionStringLocked("d3d11-adapter", "NVIDIA");
             } else {
+                setMpvOptionStringLocked("gpu-api", "auto");
                 setMpvOptionStringLocked("hwdec", "auto");
             }
             setMpvOptionStringLocked("hwdec-codecs", "all");
@@ -1382,7 +1382,7 @@ private:
             setMpvOptionStringLocked("demuxer-max-bytes", "512MiB");
             setMpvOptionStringLocked("demuxer-max-back-bytes", "256MiB");
             setMpvOptionStringLocked("demuxer-seekable-cache", "yes");
-            setMpvOptionStringLocked("cache-secs", "120");
+            setMpvOptionStringLocked("cache-secs", "36000");
             setMpvOptionStringLocked("hr-seek", "no");
 
             int64_t wid = (int64_t)(intptr_t)containerHwnd;
