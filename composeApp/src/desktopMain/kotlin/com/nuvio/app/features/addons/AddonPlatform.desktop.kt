@@ -49,7 +49,7 @@ actual suspend fun httpGetTextWithHeaders(
     url: String,
     headers: Map<String, String>,
 ): String =
-    httpRequestRaw("GET", url, headers, body = "").body
+    httpRequestRaw("GET", url, headers, body = "").bodyOrThrow()
 
 actual suspend fun httpPostJsonWithHeaders(
     url: String,
@@ -61,7 +61,17 @@ actual suspend fun httpPostJsonWithHeaders(
         url = url,
         headers = mapOf("Content-Type" to "application/json") + headers,
         body = body,
-    ).body
+    ).bodyOrThrow()
+
+private fun RawHttpResponse.bodyOrThrow(): String {
+    if (status !in 200..299) {
+        error("HTTP $status while fetching $url")
+    }
+    if (body.isBlank()) {
+        throw IllegalStateException("Empty response body")
+    }
+    return body
+}
 
 actual suspend fun httpRequestRaw(
     method: String,
