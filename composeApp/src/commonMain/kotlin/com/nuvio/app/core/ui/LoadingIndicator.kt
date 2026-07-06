@@ -23,7 +23,14 @@ import androidx.compose.ui.unit.Dp
 import kotlin.math.min
 
 private const val LoadingIndicatorSegments = 12
-private const val LoadingIndicatorAnimationMillis = 1_000
+private const val LoadingIndicatorAnimationMillis = 1_017
+private const val LoadingIndicatorSourceSize = 600f
+private const val LoadingIndicatorSourceFrames = 60f
+private const val LoadingIndicatorLayerFrameStep = 5f
+private const val LoadingIndicatorLayerOpacityStep = 8f
+private const val LoadingIndicatorStrokeWidth = 40f
+private const val LoadingIndicatorOuterRadius = 278f
+private const val LoadingIndicatorInnerRadius = 176f
 
 @Composable
 fun NuvioLoadingIndicator(
@@ -35,10 +42,10 @@ fun NuvioLoadingIndicator(
         modifier = modifier.size(size),
         contentAlignment = Alignment.Center,
     ) {
-        val transition = rememberInfiniteTransition(label = "nuvio_loading_indicator")
-        val phase by transition.animateFloat(
+        val transition = rememberInfiniteTransition(label = "nuvio_tv_lottie_loading_indicator")
+        val frame by transition.animateFloat(
             initialValue = 0f,
-            targetValue = LoadingIndicatorSegments.toFloat(),
+            targetValue = LoadingIndicatorSourceFrames,
             animationSpec = infiniteRepeatable(
                 animation = tween(
                     durationMillis = LoadingIndicatorAnimationMillis,
@@ -46,22 +53,23 @@ fun NuvioLoadingIndicator(
                 ),
                 repeatMode = RepeatMode.Restart,
             ),
-            label = "nuvio_loading_indicator_phase",
+            label = "nuvio_tv_lottie_loading_indicator_frame",
         )
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val canvasSize = this.size
             val minDimension = min(canvasSize.width, canvasSize.height)
+            val sourceScale = minDimension / LoadingIndicatorSourceSize
             val center = Offset(canvasSize.width / 2f, canvasSize.height / 2f)
-            val strokeWidth = minDimension * 0.067f
-            val outerRadius = minDimension * 0.463f
-            val innerRadius = minDimension * 0.293f
-            val segmentCount = LoadingIndicatorSegments.toFloat()
+            val strokeWidth = LoadingIndicatorStrokeWidth * sourceScale
+            val outerRadius = LoadingIndicatorOuterRadius * sourceScale
+            val innerRadius = LoadingIndicatorInnerRadius * sourceScale
 
             repeat(LoadingIndicatorSegments) { index ->
-                val distanceFromHead = (index - phase + segmentCount) % segmentCount
-                val alpha = (1f - distanceFromHead / segmentCount)
-                    .coerceIn(0.08f, 1f)
+                val alpha = loadingIndicatorOpacity(
+                    index = index,
+                    frame = frame,
+                ) / 100f
                 rotate(
                     degrees = index * (360f / LoadingIndicatorSegments),
                     pivot = center,
@@ -77,4 +85,65 @@ fun NuvioLoadingIndicator(
             }
         }
     }
+}
+
+private fun loadingIndicatorOpacity(
+    index: Int,
+    frame: Float,
+): Float {
+    val sourceFrame = frame.coerceIn(0f, LoadingIndicatorSourceFrames)
+    if (index == 0) {
+        return interpolateLoadingIndicatorOpacity(
+            startFrame = 0f,
+            endFrame = LoadingIndicatorSourceFrames,
+            startOpacity = 100f,
+            endOpacity = 0f,
+            frame = sourceFrame,
+        )
+    }
+
+    val initialOpacity = index * LoadingIndicatorLayerOpacityStep
+    val fadeOutEndFrame = index * LoadingIndicatorLayerFrameStep - 1f
+    val fadeInEndFrame = index * LoadingIndicatorLayerFrameStep
+    return when {
+        sourceFrame <= fadeOutEndFrame ->
+            interpolateLoadingIndicatorOpacity(
+                startFrame = 0f,
+                endFrame = fadeOutEndFrame,
+                startOpacity = initialOpacity,
+                endOpacity = 0f,
+                frame = sourceFrame,
+            )
+
+        sourceFrame <= fadeInEndFrame ->
+            interpolateLoadingIndicatorOpacity(
+                startFrame = fadeOutEndFrame,
+                endFrame = fadeInEndFrame,
+                startOpacity = 0f,
+                endOpacity = 100f,
+                frame = sourceFrame,
+            )
+
+        else ->
+            interpolateLoadingIndicatorOpacity(
+                startFrame = fadeInEndFrame,
+                endFrame = LoadingIndicatorSourceFrames,
+                startOpacity = 100f,
+                endOpacity = initialOpacity,
+                frame = sourceFrame,
+            )
+    }.coerceIn(0f, 100f)
+}
+
+private fun interpolateLoadingIndicatorOpacity(
+    startFrame: Float,
+    endFrame: Float,
+    startOpacity: Float,
+    endOpacity: Float,
+    frame: Float,
+): Float {
+    if (endFrame <= startFrame) return endOpacity
+    val progress = ((frame - startFrame) / (endFrame - startFrame))
+        .coerceIn(0f, 1f)
+    return startOpacity + (endOpacity - startOpacity) * progress
 }
