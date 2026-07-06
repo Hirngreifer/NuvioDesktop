@@ -36,7 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.CircularProgressIndicator
+import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,6 +64,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -734,6 +735,7 @@ private fun MainAppContent(
         val appUpdaterController = rememberAppUpdaterController()
         val hapticFeedback = LocalHapticFeedback.current
         val focusManager = LocalFocusManager.current
+        val uriHandler = LocalUriHandler.current
         val coroutineScope = rememberCoroutineScope()
         var selectedTab by rememberSaveable { mutableStateOf(AppScreenTab.Home) }
         var searchFocusRequestCount by remember { mutableStateOf(0) }
@@ -805,6 +807,7 @@ private fun MainAppContent(
         val externalPlayerNotConfiguredText = stringResource(Res.string.external_player_not_configured)
         val externalPlayerUnavailableText = stringResource(Res.string.external_player_unavailable)
         val externalPlayerFailedText = stringResource(Res.string.external_player_failed)
+        val failedOpenBrowserText = stringResource(Res.string.settings_trakt_failed_open_browser)
         val cloudLibraryPlayFailedText = stringResource(Res.string.cloud_library_play_failed)
         val cloudLibraryPlayDisabledText = stringResource(Res.string.cloud_library_play_disabled)
         val cloudLibraryPlayNotConnectedText = stringResource(Res.string.cloud_library_play_not_connected)
@@ -1197,6 +1200,16 @@ private fun MainAppContent(
                     false
                 }
             }
+        }
+
+        fun openExternalStreamUrl(url: String): Boolean {
+            val opened = runCatching {
+                uriHandler.openUri(url)
+            }.isSuccess
+            if (!opened) {
+                NuvioToastController.show(failedOpenBrowserText)
+            }
+            return opened
         }
 
         suspend fun launchCloudLibraryFile(
@@ -2319,7 +2332,7 @@ private fun MainAppContent(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            CircularProgressIndicator(color = MaterialTheme.nuvio.colors.accent)
+                            NuvioLoadingIndicator(color = MaterialTheme.nuvio.colors.accent)
                         }
                         return@composable
                     }
@@ -2375,6 +2388,13 @@ private fun MainAppContent(
                                 forceInternal = forceInternal,
                                 isAutoPlay = false,
                             )
+                            return
+                        }
+                        if (stream.shouldOpenExternally) {
+                            val opened = stream.externalOpenUrl?.let(::openExternalStreamUrl) == true
+                            if (opened) {
+                                StreamsRepository.cancelLoading()
+                            }
                             return
                         }
                         val sourceUrl = stream.playableDirectUrl ?: return
@@ -2525,7 +2545,7 @@ private fun MainAppContent(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.spacedBy(MaterialTheme.nuvio.spacing.cardPadding),
                                 ) {
-                                    CircularProgressIndicator(color = MaterialTheme.nuvio.colors.playerControlsForeground)
+                                    NuvioLoadingIndicator(color = MaterialTheme.nuvio.colors.playerControlsForeground)
                                     Text(
                                         text = stringResource(Res.string.streams_finding_source),
                                         color = MaterialTheme.nuvio.colors.playerControlsForeground.copy(alpha = MaterialTheme.nuvio.opacity.overlayHeavy),
@@ -2645,6 +2665,9 @@ private fun MainAppContent(
                                 }
                             }
                         } } else null,
+                        onOpenExternalUrl = { url ->
+                            openExternalStreamUrl(url)
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -3659,7 +3682,7 @@ private fun AppLaunchOverlay(
                 contentScale = ContentScale.Fit,
             )
             Spacer(modifier = Modifier.height(tokens.spacing.sectionGap))
-            CircularProgressIndicator(color = tokens.colors.accent)
+            NuvioLoadingIndicator(color = tokens.colors.accent)
         }
     }
 }
