@@ -34,6 +34,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -463,14 +464,21 @@ actual object P2pStreamingEngine {
         private fun extractBundledBinary(platform: DesktopTorrServerPlatform): File? {
             val resource = "/torrserver/${platform.resourceDir}/${platform.binaryName}"
             val input = P2pStreamingEngine::class.java.getResourceAsStream(resource) ?: return null
-            val dir = File(System.getProperty("java.io.tmpdir"), "nuvio-torrserver/${platform.resourceDir}").apply {
-                mkdirs()
-            }
-            val suffix = if (platform.binaryName.endsWith(".exe", ignoreCase = true)) ".exe" else null
-            val file = Files.createTempFile(dir.toPath(), "TorrServer-", suffix).toFile()
-            file.deleteOnExit()
+            val dir = DesktopStorage.rootDir.resolve("torrserver/bin/${platform.resourceDir}").toFile().apply { mkdirs() }
+            val file = File(dir, platform.binaryName)
+            val tempFile = File(dir, "${platform.binaryName}.tmp")
             input.use { source ->
-                file.outputStream().use { target -> source.copyTo(target) }
+                tempFile.outputStream().use { target -> source.copyTo(target) }
+            }
+            runCatching {
+                Files.move(
+                    tempFile.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE,
+                )
+            }.getOrElse {
+                Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
             file.setExecutable(true)
             return file
