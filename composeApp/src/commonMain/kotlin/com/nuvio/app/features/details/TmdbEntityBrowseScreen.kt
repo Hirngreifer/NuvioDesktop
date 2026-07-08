@@ -50,7 +50,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioAsyncImage as AsyncImage
 import com.nuvio.app.core.ui.NuvioDesktopVerticalScrollbar
 import nuvio.composeapp.generated.resources.*
-import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 import com.nuvio.app.core.ui.landscapePosterHeightForWidth
 import com.nuvio.app.core.ui.landscapePosterWidth
@@ -440,11 +439,11 @@ private fun EntityIdentitySidebar(
                 if (catalogueCount > 0) {
                     EntitySidebarFact(
                         label = stringResource(Res.string.entity_browse_catalogue),
-                        value = pluralStringResource(
-                            Res.plurals.entity_browse_title_count,
-                            catalogueCount,
-                            catalogueCount,
-                        ),
+                        value = if (catalogueCount == 1) {
+                            stringResource(Res.string.entity_browse_title_count_one, catalogueCount)
+                        } else {
+                            stringResource(Res.string.entity_browse_title_count_other, catalogueCount)
+                        },
                     )
                 }
             }
