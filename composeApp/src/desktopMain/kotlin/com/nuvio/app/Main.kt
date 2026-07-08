@@ -41,9 +41,9 @@ fun main(args: Array<String>) {
 
     application {
         val smokePlayerUrl = (
-                System.getProperty("nuvio.desktop.smokePlayerUrl")
-                    ?: System.getenv("NUVIO_DESKTOP_SMOKE_PLAYER_URL")
-                )
+            System.getProperty("nuvio.desktop.smokePlayerUrl")
+                ?: System.getenv("NUVIO_DESKTOP_SMOKE_PLAYER_URL")
+            )
             ?.takeIf { it.isNotBlank() }
         val wasFullscreenOnLastExit = remember { DesktopWindowModeStorage.loadWasFullscreen() }
         val savedGeometry = remember { DesktopWindowModeStorage.loadWindowedGeometry() }
@@ -98,7 +98,9 @@ fun main(args: Array<String>) {
                 // coordinates aren't a meaningful "windowed position" to restore later.
                 snapshotFlow { Triple(windowState.placement, windowState.position, windowState.size) }
                     .collect { (placement, position, size) ->
-                        if (placement == WindowPlacement.Floating && position.isSpecified) {
+                        val isWindowed = placement == WindowPlacement.Floating &&
+                            !fullscreenController.isFullscreen(window, windowState)
+                        if (isWindowed && position.isSpecified) {
                             DesktopWindowModeStorage.saveWindowedGeometry(
                                 DesktopWindowGeometry(
                                     x = position.x.value,
@@ -122,7 +124,7 @@ fun main(args: Array<String>) {
                     },
                     isFullscreen = { targetWindow ->
                         (targetWindow == null || targetWindow === window) &&
-                                fullscreenController.isFullscreen(window, windowState)
+                            fullscreenController.isFullscreen(window, windowState)
                     },
                 )
                 val uninstallFullscreenShortcuts = installDesktopAppFullscreenShortcuts(window)
