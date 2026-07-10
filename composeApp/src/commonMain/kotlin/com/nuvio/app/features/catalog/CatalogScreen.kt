@@ -55,6 +55,7 @@ import com.nuvio.app.core.ui.NuvioDesktopVerticalScrollbar
 import com.nuvio.app.core.ui.NuvioPosterWatchedOverlay
 import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
 import com.nuvio.app.core.ui.posterCardClickable
+import com.nuvio.app.core.ui.desktopPosterHoverScale
 import com.nuvio.app.core.ui.nuvioSafeBottomPadding
 import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
 import com.nuvio.app.features.home.MetaPreview
@@ -305,7 +306,7 @@ private fun CatalogPosterTile(
     onLongClick: (() -> Unit)? = null,
 ) {
     Column(
-        modifier = Modifier.posterCardClickable(onClick = onClick, onLongClick = onLongClick),
+        modifier = Modifier.desktopPosterHoverScale(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(
@@ -313,7 +314,14 @@ private fun CatalogPosterTile(
                 .fillMaxWidth()
                 .aspectRatio(item.posterShape.catalogAspectRatio())
                 .clip(RoundedCornerShape(cornerRadiusDp.dp))
-                .background(MaterialTheme.colorScheme.surface),
+                .background(MaterialTheme.colorScheme.surface)
+                .posterCardClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    zoomImageUrl = item.poster,
+                    zoomCornerRadius = cornerRadiusDp.dp,
+                    hoverScaleEnabled = false,
+                ),
         ) {
             if (item.poster != null) {
                 AsyncImage(
