@@ -61,7 +61,7 @@ data class WatchPartyRoomState(
     val isPlaying: Boolean,
     val positionMs: Long,       // Anker-Position …
     val atWallClockMs: Long,    // … zum Absende-Zeitpunkt (Epoch)
-    val actorId: String,        // wer den State gesetzt hat
+    val actorId: String,        // wer den State gesetzt hat (zufällige UUID pro App-Session)
     val seq: Long,              // monoton steigende Sequenznummer
     val reason: StateReason,    // USER | BUFFER_HOLD | AUTO_RESUME
 )
@@ -83,7 +83,8 @@ In-Memory-Fake).
 
 - Eigener `SupabaseClient` mit separater URL/Key (`gradle.properties`,
   analog zu den bestehenden Supabase-Werten in `composeApp/build.gradle.kts`)
-- Channel-Name = `watchparty:{code}`, Code = 6-stellig, beim Erstellen generiert
+- Channel-Name = `watchparty:{code}`, Code = 6 Zeichen aus A–Z/2–9 (ohne
+  verwechselbare Zeichen wie O/0, I/1), beim Erstellen generiert
 - API: `join(roomCode, displayName)`, `leave()`, `broadcastState(state)`,
   `updatePresence(status, lastKnownState)`
 - Exponiert: `Flow<WatchPartyRoomState>` (eingehende Broadcasts),
@@ -178,7 +179,8 @@ Nutzeraktion zurückgebroadcastet wird.
 - **Einstieg:** neuer „Watch Party"-Button in den Player-Controls (analog
   `Sources`/`Episodes`-Panels). Panel mit „Raum erstellen" (zeigt generierten
   Code groß an) und „Beitreten" (Code-Eingabe). Anzeigename aus dem
-  Nuvio-Profil, im Panel editierbar.
+  Nuvio-Profil (falls nicht angemeldet: generierter Gast-Name, z. B.
+  „Gast-4821"), im Panel editierbar.
 - **Im Raum:** Panel zeigt Raumcode, Teilnehmerliste mit Status
   (▶ spielt / ⏸ pausiert / ⏳ puffert / 🔍 wählt Quelle) und „Verlassen".
   Permanentes Badge in den Player-Controls (Personen-Icon + Teilnehmerzahl).
