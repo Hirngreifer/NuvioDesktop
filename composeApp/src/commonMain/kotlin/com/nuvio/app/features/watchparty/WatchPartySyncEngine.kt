@@ -90,11 +90,132 @@ class WatchPartySyncEngine(
         return Output(commands = commands, presenceStatus = updatePresenceStatus(statusFor(snapshot)))
     }
 
-    /** Full snapshot-delta logic lands in Task 3; for now we only record the snapshot. */
+    /**
+     * Where the local player should be now, extrapolated from the previous snapshot.
+     * Position is treated as frozen while paused or buffering.
+     */
+    private fun expectedLocalPositionMs(previous: WatchPartyPlaybackSnapshot, nowMs: Long): Long =
+        if (previous.isPlaying && !previous.isBuffering) {
+            previous.positionMs + (nowMs - lastSnapshotAtMs)
+        } else {
+            previous.positionMs
+        }
+
+    private fun buildBroadcast(
+        isPlaying: Boolean,
+        positionMs: Long,
+        nowMs: Long,
+        reason: WatchPartyStateReason,
+    ): WatchPartyRoomState {
+        val next = WatchPartyRoomState(
+            contentId = requireNotNull(localContent) { "cannot broadcast without local content" },
+            isPlaying = isPlaying,
+            positionMs = positionMs,
+            atWallClockMs = nowMs,
+            actorId = actorId,
+            seq = (lastKnownState?.seq ?: 0L) + 1L,
+            reason = reason,
+        )
+        lastKnownState = next
+        return next
+    }
+
     fun onSnapshot(snapshot: WatchPartyPlaybackSnapshot, nowMs: Long): Output {
+        val previous = lastSnapshot
+        val known = lastKnownState
+        val content = localContent
+        val contentMatches = known != null && content != null && known.contentId.sameContentAs(content)
+
+        var broadcast: WatchPartyRoomState? = null
+        val commands = mutableListOf<WatchPartyPlayerCommand>()
+
+        if (known == null && hasReceivedPresence && content != null) {
+            // Empty room after join: we define the initial room state.
+            broadcast = buildBroadcast(
+                isPlaying = snapshot.isPlaying,
+                positionMs = snapshot.positionMs,
+                nowMs = nowMs,
+                reason = WatchPartyStateReason.USER,
+            )
+        } else if (contentMatches) {
+            if (snapshot.isBuffering) {
+                if (bufferingSinceMs == null) bufferingSinceMs = nowMs
+                val bufferedLongEnough = nowMs - (bufferingSinceMs ?: nowMs) >= config.bufferDebounceMs
+                if (bufferedLongEnough && known!!.isPlaying) {
+                    broadcast = buildBroadcast(
+                        isPlaying = false,
+                        positionMs = snapshot.positionMs,
+                        nowMs = nowMs,
+                        reason = WatchPartyStateReason.BUFFER_HOLD,
+                    )
+                }
+            } else {
+                val wasBuffering = previous?.isBuffering == true
+                bufferingSinceMs = null
+                if (
+                    wasBuffering &&
+                    known!!.reason == WatchPartyStateReason.BUFFER_HOLD &&
+                    known.actorId == actorId
+                ) {
+                    broadcast = buildBroadcast(
+                        isPlaying = true,
+                        positionMs = snapshot.positionMs,
+                        nowMs = nowMs,
+                        reason = WatchPartyStateReason.AUTO_RESUME,
+                    )
+                    commands += WatchPartyPlayerCommand.Play
+                    pendingPlayState = true
+                }
+            }
+
+            if (broadcast == null && previous != null) {
+                var userAction = false
+
+                val flipped = snapshot.isPlaying != previous.isPlaying
+                if (flipped && !snapshot.isBuffering && !previous.isBuffering) {
+                    when {
+                        pendingPlayState == snapshot.isPlaying -> pendingPlayState = null
+                        nowMs < suppressUntilMs -> Unit
+                        else -> userAction = true
+                    }
+                }
+
+                val expectedLocalMs = expectedLocalPositionMs(previous, nowMs)
+                if (abs(snapshot.positionMs - expectedLocalMs) > config.seekDetectionThresholdMs) {
+                    val pendingTarget = pendingSeekTargetMs
+                    when {
+                        pendingTarget != null &&
+                            abs(snapshot.positionMs - pendingTarget) <= config.seekDetectionThresholdMs ->
+                            pendingSeekTargetMs = null
+                        nowMs < suppressUntilMs -> Unit
+                        else -> userAction = true
+                    }
+                }
+
+                if (userAction) {
+                    broadcast = buildBroadcast(
+                        isPlaying = snapshot.isPlaying,
+                        positionMs = snapshot.positionMs,
+                        nowMs = nowMs,
+                        reason = WatchPartyStateReason.USER,
+                    )
+                }
+            }
+        }
+
         lastSnapshot = snapshot
         lastSnapshotAtMs = nowMs
-        return Output()
+
+        val status = if (known != null && !contentMatches) {
+            WatchPartyParticipantStatus.SELECTING_SOURCE
+        } else {
+            statusFor(snapshot)
+        }
+        return Output(
+            commands = commands,
+            broadcast = broadcast,
+            presenceStatus = updatePresenceStatus(status),
+        )
     }
 
     /** Full content-change logic lands in Task 4; for now we only record the content. */
