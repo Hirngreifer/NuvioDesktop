@@ -12,17 +12,17 @@ private val EP1 = WatchPartyContentId("tt1", "series", 1, 1, "Ep 1")
 private val EP2 = WatchPartyContentId("tt1", "series", 1, 2, "Ep 2")
 
 /**
- * Build a [WatchPartyRoomState] with a [reason] parameter (defaults to USER),
- * wrapping the existing [testState] helper.
+ * Build a [WatchPartyRoomState] with a [reason] and [atWallClockMs] parameter (both default).
  */
-private fun roomState(
+internal fun roomState(
     content: WatchPartyContentId = testContent(),
     isPlaying: Boolean = true,
     positionMs: Long = 60_000L,
     actorId: String = "actor-remote",
     seq: Long = 1L,
     reason: WatchPartyStateReason = WatchPartyStateReason.USER,
-) = WatchPartyRoomState(content, isPlaying, positionMs, 1_000L, actorId, seq, reason)
+    atWallClockMs: Long = 1_000L,
+) = WatchPartyRoomState(content, isPlaying, positionMs, atWallClockMs, actorId, seq, reason)
 
 class WatchPartySyncEngineContentChangeTest {
 

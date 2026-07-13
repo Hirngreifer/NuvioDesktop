@@ -171,7 +171,7 @@ class WatchPartySession(
             }
         }
 
-        dispatch(engine.onPresenceSync(payloads.mapNotNull { it.lastKnownState }, nowMs()))
+        dispatch(engine.onPresenceSync(payloads, nowMs()))
     }
 
     private suspend fun dispatch(output: WatchPartySyncEngine.Output) {

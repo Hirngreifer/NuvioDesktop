@@ -7,6 +7,8 @@ data class WatchPartySyncConfig(
     val seekDetectionThresholdMs: Long = 2_000L,
     val bufferDebounceMs: Long = 700L,
     val suppressWindowMs: Long = 500L,
+    val contentStartGraceMs: Long = 5_000L,
+    val contentStartTimeoutMs: Long = 60_000L,
 )
 
 sealed interface WatchPartyPlayerCommand {
@@ -46,6 +48,7 @@ class WatchPartySyncEngine(
     private var hasReceivedPresence: Boolean = false
     private var lastPresenceStatus: WatchPartyParticipantStatus? = null
     private var realignOnNextSnapshot: Boolean = false
+    private var participantStatuses: Map<String, WatchPartyParticipantStatus> = emptyMap()
 
     fun onRemoteState(state: WatchPartyRoomState, nowMs: Long): Output {
         if (state.actorId == actorId) {
@@ -219,10 +222,13 @@ class WatchPartySyncEngine(
         } else {
             statusFor(snapshot)
         }
-        return Output(
-            commands = commands,
-            broadcast = broadcast,
-            presenceStatus = updatePresenceStatus(status),
+        return mergeContentStartResume(
+            Output(
+                commands = commands,
+                broadcast = broadcast,
+                presenceStatus = updatePresenceStatus(status),
+            ),
+            nowMs,
         )
     }
 
@@ -237,6 +243,8 @@ class WatchPartySyncEngine(
         val snapshot = lastSnapshot ?: return Output()
         if (snapshot.isBuffering) return Output()
 
+        mergeContentStartResume(Output(), nowMs).let { if (it.broadcast != null) return it }
+
         val expectedMs = state.expectedPositionMs(nowMs)
         val localMs = expectedLocalPositionMs(snapshot, nowMs)
         if (abs(localMs - expectedMs) <= config.driftToleranceMs) return Output()
@@ -249,18 +257,26 @@ class WatchPartySyncEngine(
     /**
      * Late-join / reconnect resync: apply the newest state carried in presence
      * metadata. An empty room without any state makes us the state owner.
+     * Also tracks participant statuses for the all-ready auto-resume check.
      */
-    fun onPresenceSync(states: List<WatchPartyRoomState>, nowMs: Long): Output {
+    fun onPresenceSync(payloads: List<WatchPartyPresencePayload>, nowMs: Long): Output {
         hasReceivedPresence = true
+        participantStatuses = payloads
+            .filter { it.actorId != actorId }
+            .associate { it.actorId to it.status }
         var best: WatchPartyRoomState? = null
-        for (state in states) {
+        for (payload in payloads) {
+            val state = payload.lastKnownState ?: continue
             if (best == null || state.isNewerThan(best)) best = state
         }
         if (best != null) {
-            if (!best.isNewerThan(lastKnownState)) return Output()
-            lastKnownState = best
-            if (best.actorId == actorId) return Output()
-            return applyKnownState(nowMs)
+            if (best.isNewerThan(lastKnownState)) {
+                lastKnownState = best
+                if (best.actorId != actorId) {
+                    return mergeContentStartResume(applyKnownState(nowMs), nowMs)
+                }
+            }
+            return mergeContentStartResume(Output(), nowMs)
         }
         val content = localContent
         val snapshot = lastSnapshot
@@ -332,4 +348,42 @@ class WatchPartySyncEngine(
         } else {
             null
         }
+
+    /**
+     * All-ready auto-resume for a coordinated content start. Egalitarian: every
+     * ready client evaluates this; concurrent resumes converge via seq/tiebreaker.
+     * IDLE participants (browsing, not following) never block the start.
+     */
+    private fun maybeContentStartResume(nowMs: Long): WatchPartyRoomState? {
+        val known = lastKnownState ?: return null
+        if (known.reason != WatchPartyStateReason.CONTENT_CHANGE || known.isPlaying) return null
+        val content = localContent ?: return null
+        if (!known.contentId.sameContentAs(content)) return null
+        val snapshot = lastSnapshot ?: return null
+        if (snapshot.isBuffering) return null
+        val holdAgeMs = nowMs - known.atWallClockMs
+        if (holdAgeMs < config.contentStartGraceMs) return null
+        val othersReady = participantStatuses.values.none {
+            it == WatchPartyParticipantStatus.SELECTING_SOURCE || it == WatchPartyParticipantStatus.BUFFERING
+        }
+        if (!othersReady && holdAgeMs < config.contentStartTimeoutMs) return null
+        return buildBroadcast(
+            isPlaying = true,
+            positionMs = known.positionMs,
+            nowMs = nowMs,
+            reason = WatchPartyStateReason.AUTO_RESUME,
+        )
+    }
+
+    private fun mergeContentStartResume(base: Output, nowMs: Long): Output {
+        if (base.broadcast != null) return base
+        val resume = maybeContentStartResume(nowMs) ?: return base
+        pendingPlayState = true
+        suppressUntilMs = nowMs + config.suppressWindowMs
+        return base.copy(
+            commands = base.commands + WatchPartyPlayerCommand.Play,
+            broadcast = resume,
+            presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.PLAYING) ?: base.presenceStatus,
+        )
+    }
 }

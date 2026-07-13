@@ -68,8 +68,8 @@ class WatchPartySyncEngineDriftPresenceTest {
         val engine = primedEngine(snapshot = testSnapshot(isPlaying = false, positionMs = 0L))
         val output = engine.onPresenceSync(
             listOf(
-                testState(seq = 5, isPlaying = true, positionMs = 100_000L, atWallClockMs = 1_000_000L),
-                testState(seq = 7, isPlaying = true, positionMs = 200_000L, atWallClockMs = 1_000_000L),
+                WatchPartyPresencePayload("actor-remote", "Remote", WatchPartyParticipantStatus.PAUSED, testState(seq = 5, isPlaying = true, positionMs = 100_000L, atWallClockMs = 1_000_000L)),
+                WatchPartyPresencePayload("actor-remote2", "Remote2", WatchPartyParticipantStatus.PLAYING, testState(seq = 7, isPlaying = true, positionMs = 200_000L, atWallClockMs = 1_000_000L)),
             ),
             1_000_000L,
         )
@@ -85,7 +85,7 @@ class WatchPartySyncEngineDriftPresenceTest {
     fun presenceSyncIgnoresStatesOlderThanKnown() {
         val engine = engineInPlayingRoom()
         engine.onRemoteState(testState(seq = 9), 1_000_500L)
-        val output = engine.onPresenceSync(listOf(testState(seq = 7, isPlaying = false)), 1_001_000L)
+        val output = engine.onPresenceSync(listOf(WatchPartyPresencePayload("actor-remote", "Remote", WatchPartyParticipantStatus.PAUSED, testState(seq = 7, isPlaying = false))), 1_001_000L)
         assertTrue(output.commands.isEmpty())
         assertEquals(9L, engine.lastKnownState?.seq)
     }
