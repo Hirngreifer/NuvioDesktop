@@ -51,26 +51,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
-import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.watchparty.WatchPartyConnectionState
 import com.nuvio.app.features.watchparty.WatchPartyContentId
+import com.nuvio.app.features.watchparty.WatchPartyCoordinator
 import com.nuvio.app.features.watchparty.WatchPartyParticipant
 import com.nuvio.app.features.watchparty.WatchPartyParticipantStatus
 import com.nuvio.app.features.watchparty.WatchPartyRoomCodes
 import com.nuvio.app.features.watchparty.WatchPartySessionState
 import com.nuvio.app.features.watchparty.WatchPartySupabaseProvider
 import nuvio.composeapp.generated.resources.*
-import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
-import kotlin.random.Random
 
 @Composable
 internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
     LaunchedEffect(showWatchPartyPanel) {
         if (showWatchPartyPanel && watchPartyDisplayName.isBlank()) {
-            val profileName = ProfileRepository.state.value.activeProfile?.name?.takeIf { it.isNotBlank() }
-            watchPartyDisplayName = profileName
-                ?: getString(Res.string.watch_party_guest_name, Random.nextInt(1000, 10000))
+            watchPartyDisplayName = WatchPartyCoordinator.resolveDisplayName()
         }
     }
 
@@ -104,7 +100,10 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
             watchPartyContentPrompt = null
             openEpisodesPanel()
         },
-        onDismiss = { watchPartyContentPrompt = null },
+        onDismiss = {
+            watchPartyDismissedPrompt = prompt
+            watchPartyContentPrompt = null
+        },
     )
 }
 

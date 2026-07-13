@@ -4,18 +4,19 @@ package com.nuvio.app.features.player
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import co.touchlab.kermit.Logger
-import com.nuvio.app.features.trakt.TraktPlatformClock
-import com.nuvio.app.features.watchparty.SupabaseWatchPartyClient
 import com.nuvio.app.features.watchparty.WatchPartyContentId
+import com.nuvio.app.features.watchparty.WatchPartyCoordinator
 import com.nuvio.app.features.watchparty.WatchPartyEvent
 import com.nuvio.app.features.watchparty.WatchPartyPlaybackSnapshot
 import com.nuvio.app.features.watchparty.WatchPartyPlayerCommand
-import com.nuvio.app.features.watchparty.WatchPartyRoomCodes
-import com.nuvio.app.features.watchparty.WatchPartySession
 import com.nuvio.app.features.watchparty.WatchPartySessionState
-import com.nuvio.app.features.watchparty.WatchPartySupabaseProvider
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.watch_party_toast_buffering
 import nuvio.composeapp.generated.resources.watch_party_toast_joined
@@ -23,24 +24,23 @@ import nuvio.composeapp.generated.resources.watch_party_toast_left
 import nuvio.composeapp.generated.resources.watch_party_toast_paused
 import nuvio.composeapp.generated.resources.watch_party_toast_resumed
 import nuvio.composeapp.generated.resources.watch_party_toast_seeked
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import org.jetbrains.compose.resources.StringResource
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 
 private val watchPartyLog = Logger.withTag("WatchPartyRuntime")
-
-// runtime.scope dies with the composition; leave() must survive player close.
-private val watchPartyCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
 internal data class WatchPartyToastState(
     val messageRes: StringResource,
     val args: List<Any> = emptyList(),
 )
+
+/**
+ * Pure function — testable without Compose.
+ * Returns true when the prompt for [incoming] should be shown to the user.
+ * Suppressed when the user has already dismissed the same content.
+ */
+internal fun shouldShowWatchPartyPrompt(
+    incoming: WatchPartyContentId,
+    dismissed: WatchPartyContentId?,
+): Boolean = dismissed == null || !incoming.sameContentAs(dismissed)
 
 internal fun PlayerScreenRuntime.currentWatchPartyContentId(): WatchPartyContentId? {
     if (parentMetaId.isBlank()) return null
@@ -63,46 +63,22 @@ internal fun PlayerScreenRuntime.currentWatchPartyContentId(): WatchPartyContent
     )
 }
 
-@OptIn(ExperimentalUuidApi::class)
-private fun PlayerScreenRuntime.newWatchPartySession(): WatchPartySession =
-    WatchPartySession(
-        client = SupabaseWatchPartyClient(WatchPartySupabaseProvider.client, scope),
-        scope = scope,
-        nowMs = { TraktPlatformClock.nowEpochMs() },
-        actorId = Uuid.random().toString(),
-    ).also { watchPartySession = it }
-
 internal fun PlayerScreenRuntime.createWatchPartyRoom() {
-    if (watchPartySession != null || !WatchPartySupabaseProvider.isConfigured) return
-    val session = newWatchPartySession()
-    scope.launch {
-        runCatching { session.create(watchPartyDisplayName) }
-            .onFailure { error ->
-                watchPartyLog.e(error) { "Failed to create watch party room" }
-                watchPartySession = null
-            }
-    }
+    if (!WatchPartyCoordinator.isConfigured) return
+    WatchPartyCoordinator.createRoom()
 }
 
 internal fun PlayerScreenRuntime.joinWatchPartyRoom(code: String) {
-    if (watchPartySession != null || !WatchPartySupabaseProvider.isConfigured) return
-    if (!WatchPartyRoomCodes.isValid(WatchPartyRoomCodes.normalize(code))) return
-    val session = newWatchPartySession()
-    scope.launch {
-        runCatching { session.join(code, watchPartyDisplayName) }
-            .onFailure { error ->
-                watchPartyLog.e(error) { "Failed to join watch party room" }
-                watchPartySession = null
-            }
-    }
+    if (!WatchPartyCoordinator.isConfigured) return
+    WatchPartyCoordinator.joinRoom(code)
 }
 
 internal fun PlayerScreenRuntime.leaveWatchParty() {
-    val session = watchPartySession ?: return
-    watchPartySession = null
     watchPartySessionState = WatchPartySessionState()
     watchPartyContentPrompt = null
-    watchPartyCleanupScope.launch { session.leave() }
+    watchPartyDismissedPrompt = null
+    watchPartyToast = null
+    WatchPartyCoordinator.leave()
 }
 
 internal fun PlayerScreenRuntime.executeWatchPartyCommand(command: WatchPartyPlayerCommand) {
@@ -157,25 +133,32 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
             watchPartyLog.i {
                 "Content prompt: room=${event.contentId} local=${currentWatchPartyContentId()}"
             }
-            watchPartyContentPrompt = event.contentId
+            if (shouldShowWatchPartyPrompt(event.contentId, watchPartyDismissedPrompt)) {
+                watchPartyContentPrompt = event.contentId
+            }
         }
     }
 }
 
 @Composable
 internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
-    val session = watchPartySession
+    val session by WatchPartyCoordinator.session.collectAsState()
     LaunchedEffect(session) {
-        if (session == null) return@LaunchedEffect
-        launch {
-            session.state.collect { watchPartySessionState = it }
+        val active = session
+        watchPartySession = active
+        if (active == null) {
+            watchPartySessionState = WatchPartySessionState()
+            return@LaunchedEffect
         }
         launch {
-            session.commands.collect { executeWatchPartyCommand(it) }
+            active.state.collect { watchPartySessionState = it }
+        }
+        launch {
+            active.commands.collect { executeWatchPartyCommand(it) }
         }
         launch {
             snapshotFlow { playbackSnapshot }.collect { snapshot ->
-                session.onPlaybackSnapshot(
+                active.onPlaybackSnapshot(
                     WatchPartyPlaybackSnapshot(
                         isPlaying = snapshot.isPlaying,
                         positionMs = snapshot.positionMs,
@@ -186,7 +169,8 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
         }
         launch {
             snapshotFlow { currentWatchPartyContentId() }.collect { contentId ->
-                session.onContentChanged(contentId)
+                WatchPartyCoordinator.onPlayerBoundContent(contentId)
+                active.onContentChanged(contentId)
                 val prompt = watchPartyContentPrompt
                 if (prompt != null && contentId != null && prompt.sameContentAs(contentId)) {
                     watchPartyContentPrompt = null
@@ -194,15 +178,19 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
             }
         }
         launch {
-            session.events.collect { handleWatchPartyEvent(it) }
+            active.events.collect { handleWatchPartyEvent(it) }
+        }
+        launch {
+            WatchPartyCoordinator.followInPlayer.collect { request ->
+                launchWatchPartyEpisodeFollow(request)
+            }
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
-            watchPartySession?.let { active ->
-                watchPartyCleanupScope.launch { active.leave() }
-            }
+            // The session is app-owned: closing the player only unbinds (-> IDLE).
+            WatchPartyCoordinator.onPlayerUnbound()
         }
     }
 }
