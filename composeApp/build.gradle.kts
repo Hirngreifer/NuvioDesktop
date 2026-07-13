@@ -45,6 +45,12 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
     @get:Input
     abstract val supabaseAnonKey: Property<String>
 
+    @get:Input
+    abstract val watchPartySupabaseUrl: Property<String>
+
+    @get:Input
+    abstract val watchPartySupabaseAnonKey: Property<String>
+
     @TaskAction
     fun generate() {
         val props = Properties()
@@ -60,6 +66,20 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
                 |object SupabaseConfig {
                 |    const val URL = "${supabaseUrl.get()}"
                 |    const val ANON_KEY = "${supabaseAnonKey.get()}"
+                |}
+                """.trimMargin()
+            )
+        }
+
+        outDir.resolve("com/nuvio/app/features/watchparty").apply {
+            mkdirs()
+            resolve("WatchPartySupabaseConfig.kt").writeText(
+                """
+                |package com.nuvio.app.features.watchparty
+                |
+                |object WatchPartySupabaseConfig {
+                |    const val URL = "${watchPartySupabaseUrl.get()}"
+                |    const val ANON_KEY = "${watchPartySupabaseAnonKey.get()}"
                 |}
                 """.trimMargin()
             )
@@ -453,6 +473,8 @@ val generateRuntimeConfigs = tasks.register<GenerateRuntimeConfigsTask>("generat
     desktopAppVersionCode.set(desktopReleaseVersionCode)
     supabaseUrl.set(runtimeConfigValue("NUVIO_SUPABASE_URL"))
     supabaseAnonKey.set(runtimeConfigValue("NUVIO_SUPABASE_ANON_KEY"))
+    watchPartySupabaseUrl.set(runtimeConfigValue("NUVIO_WATCHPARTY_SUPABASE_URL"))
+    watchPartySupabaseAnonKey.set(runtimeConfigValue("NUVIO_WATCHPARTY_SUPABASE_ANON_KEY"))
 }
 
 val isMacHost = System.getProperty("os.name").contains("mac", ignoreCase = true)
