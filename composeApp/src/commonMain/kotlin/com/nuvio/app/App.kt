@@ -221,6 +221,7 @@ import com.nuvio.app.features.trakt.TraktSettingsRepository
 import com.nuvio.app.features.updater.AppUpdaterHost
 import com.nuvio.app.features.updater.rememberAppUpdaterController
 import com.nuvio.app.features.watched.WatchedRepository
+import com.nuvio.app.features.watchparty.WatchPartyCoordinator
 import com.nuvio.app.features.watchprogress.ContinueWatchingItem
 import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
 import com.nuvio.app.features.watchprogress.ResumePromptRepository
@@ -807,6 +808,7 @@ private fun MainAppContent(
         val cloudLibraryPlayFailedText = stringResource(Res.string.cloud_library_play_failed)
         val cloudLibraryPlayDisabledText = stringResource(Res.string.cloud_library_play_disabled)
         val cloudLibraryPlayNotConnectedText = stringResource(Res.string.cloud_library_play_not_connected)
+        val watchPartyFollowFailedText = stringResource(Res.string.watch_party_follow_failed)
         val nativeTabHomeTitle = stringResource(Res.string.compose_nav_home)
         val nativeTabSearchTitle = stringResource(Res.string.compose_nav_search)
         val nativeTabLibraryTitle = stringResource(Res.string.compose_nav_library)
@@ -1253,6 +1255,7 @@ private fun MainAppContent(
             resumeProgressFraction: Float?,
             manualSelection: Boolean,
             startFromBeginning: Boolean,
+            isWatchPartyFollow: Boolean = false,
         ) {
             val targetResumePositionMs = if (startFromBeginning) 0L else (resumePositionMs ?: 0L)
             val targetResumeProgressFraction = if (startFromBeginning) null else resumeProgressFraction
@@ -1322,11 +1325,59 @@ private fun MainAppContent(
                     resumeProgressFraction = targetResumeProgressFraction,
                     manualSelection = manualSelection,
                     startFromBeginning = startFromBeginning,
+                    isWatchPartyFollow = isWatchPartyFollow,
                 ),
             )
             navController.navigate(
                 StreamRoute(launchId = streamLaunchId),
             )
+        }
+
+        LaunchedEffect(Unit) {
+            WatchPartyCoordinator.followViaLaunch.collect { request ->
+                val content = request.contentId
+                val meta = runCatching {
+                    MetaDetailsRepository.fetch(content.mediaType, content.metaId)
+                }.getOrNull()
+                if (meta == null) {
+                    WatchPartyCoordinator.markLaunchFollowFinished()
+                    NuvioToastController.show(watchPartyFollowFailedText)
+                    return@collect
+                }
+                val video = if (content.season != null || content.episode != null) {
+                    meta.videos.firstOrNull { it.season == content.season && it.episode == content.episode }
+                } else {
+                    null
+                }
+                if ((content.season != null || content.episode != null) && video == null) {
+                    WatchPartyCoordinator.markLaunchFollowFinished()
+                    NuvioToastController.show(watchPartyFollowFailedText)
+                    return@collect
+                }
+                if (navController.currentBackStackEntry?.destination?.hasRoute<PlayerRoute>() == true) {
+                    navController.popBackStack()
+                }
+                launchPlaybackWithDownloadPreference(
+                    type = content.mediaType,
+                    videoId = video?.id ?: content.metaId,
+                    parentMetaId = content.metaId,
+                    parentMetaType = content.mediaType,
+                    title = meta.name,
+                    logo = meta.logo,
+                    poster = meta.poster,
+                    background = meta.background,
+                    seasonNumber = content.season,
+                    episodeNumber = content.episode,
+                    episodeTitle = video?.title,
+                    episodeThumbnail = video?.thumbnail,
+                    pauseDescription = null,
+                    resumePositionMs = request.resumePositionMs,
+                    resumeProgressFraction = null,
+                    manualSelection = false,
+                    startFromBeginning = request.resumePositionMs <= 0L,
+                    isWatchPartyFollow = true,
+                )
+            }
         }
 
         val onPlay: (String, String, String, String, String, String?, String?, String?, Int?, Int?, String?, String?, String?, Long?) -> Unit =
@@ -1901,11 +1952,15 @@ private fun MainAppContent(
                     val streamRouteScope = rememberCoroutineScope()
                     var resolvingDebridStream by rememberSaveable(route.launchId) { mutableStateOf(false) }
                     var pendingP2pStreamOpen by remember { mutableStateOf<PendingP2pStreamOpen?>(null) }
+                    val watchPartyFollowNavigatedToPlayer = remember { mutableStateOf(false) }
                     val lifecycleOwner = backStackEntry
                     DisposableEffect(lifecycleOwner, route.launchId) {
                         val observer = LifecycleEventObserver { _, event ->
                             if (event == Lifecycle.Event.ON_DESTROY) {
                                 StreamLaunchStore.remove(route.launchId)
+                                if (launch.isWatchPartyFollow && !watchPartyFollowNavigatedToPlayer.value) {
+                                    WatchPartyCoordinator.markLaunchFollowFinished()
+                                }
                             }
                         }
                         lifecycleOwner.lifecycle.addObserver(observer)
@@ -2037,6 +2092,7 @@ private fun MainAppContent(
 
                         val launchId = PlayerLaunchStore.put(playerLaunch)
                         StreamsRepository.cancelLoading()
+                        watchPartyFollowNavigatedToPlayer.value = true
                         navController.navigate(PlayerRoute(launchId = launchId)) {
                             if (replaceStreamRoute) {
                                 popUpTo<StreamRoute> { inclusive = true }
@@ -2162,6 +2218,7 @@ private fun MainAppContent(
                             StreamsRepository.clear()
                             reuseNavigated = true
                             val launchId = PlayerLaunchStore.put(playerLaunch)
+                            watchPartyFollowNavigatedToPlayer.value = true
                             navController.navigate(PlayerRoute(launchId = launchId)) {
                                 popUpTo<StreamRoute> { inclusive = true }
                             }
@@ -2298,6 +2355,7 @@ private fun MainAppContent(
                         StreamsRepository.consumeAutoPlay()
                         StreamsRepository.cancelLoading()
                         val launchId = PlayerLaunchStore.put(playerLaunch)
+                        watchPartyFollowNavigatedToPlayer.value = true
                         navController.navigate(PlayerRoute(launchId = launchId)) {
                             popUpTo<StreamRoute> { inclusive = true }
                         }
@@ -2428,6 +2486,7 @@ private fun MainAppContent(
 
                         val launchId = PlayerLaunchStore.put(playerLaunch)
                         StreamsRepository.cancelLoading()
+                        watchPartyFollowNavigatedToPlayer.value = true
                         navController.navigate(
                             PlayerRoute(launchId = launchId)
                         )

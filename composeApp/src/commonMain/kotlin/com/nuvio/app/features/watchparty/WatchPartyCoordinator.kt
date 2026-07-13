@@ -170,6 +170,7 @@ object WatchPartyCoordinator {
     fun requestManualFollow() = routeFollow(_roomContent.value)
 
     fun onPlayerBoundContent(contentId: WatchPartyContentId?) {
+        launchFollowActive = false
         playerBound = true
         boundContent.value = contentId
         _session.value?.setFollowing(true)

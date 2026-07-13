@@ -410,6 +410,7 @@
     <string name="watch_party_prompt_title">The room is now watching %1$s</string>
     <string name="watch_party_prompt_show_episodes">Show episodes</string>
     <string name="watch_party_prompt_dismiss">Dismiss</string>
+    <string name="watch_party_follow_failed">Could not open what the party is watching. Open it manually to rejoin the sync.</string>
     <string name="compose_player_style">Style</string>
     <string name="compose_player_select_addon_subtitle_first">Select an addon subtitle first</string>
     <string name="compose_player_subs">Subs</string>
