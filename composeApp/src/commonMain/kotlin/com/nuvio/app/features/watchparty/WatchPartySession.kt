@@ -72,6 +72,7 @@ class WatchPartySession(
     suspend fun join(roomCode: String, displayName: String) {
         val code = WatchPartyRoomCodes.normalize(roomCode)
         require(WatchPartyRoomCodes.isValid(code)) { "invalid room code: $roomCode" }
+        check(collectJobs.isEmpty()) { "session already joined a room" }
         this.displayName = displayName
 
         // Collect BEFORE joining so no early emission is lost
@@ -170,10 +171,10 @@ class WatchPartySession(
             runCatching { client.broadcastState(state) }
                 .onFailure { error -> log.w(error) { "Failed to broadcast watch party state" } }
         }
-        // Update presence when the status changed (and we are in a room), or whenever we
-        // broadcast — presence metadata must always carry the newest state for late-joiners.
-        val shouldUpdatePresence = output.broadcast != null ||
-            (output.presenceStatus != null && _state.value.isActive)
+        // Update presence when we are in a room and either broadcast or status changed —
+        // presence metadata must always carry the newest state for late-joiners.
+        val shouldUpdatePresence = _state.value.isActive &&
+            (output.broadcast != null || output.presenceStatus != null)
         if (shouldUpdatePresence) {
             val status = output.presenceStatus
                 ?: _state.value.participants.firstOrNull { it.id == actorId }?.status

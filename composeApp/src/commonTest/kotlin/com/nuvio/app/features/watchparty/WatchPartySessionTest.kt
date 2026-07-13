@@ -10,6 +10,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -185,5 +186,19 @@ class WatchPartySessionTest {
             commands.filterIsInstance<WatchPartyPlayerCommand.SeekTo>().any { it.positionMs == 100_000L },
             "drift loop must realign the player, got: $commands",
         )
+    }
+
+    @Test
+    fun joiningTwiceWithoutLeaveThrows() = runBlocking {
+        var now = 1_000_000L
+        val room = FakeWatchPartyRoom()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = WatchPartySession(room.client(), scope, { now }, "actor-a", driftTickIntervalMs = 3_600_000L)
+        session.join("ABCD23", "Anna")
+        assertFailsWith<IllegalStateException> {
+            session.join("ABCD23", "Anna")
+        }
+        session.leave()
+        scope.cancel()
     }
 }
