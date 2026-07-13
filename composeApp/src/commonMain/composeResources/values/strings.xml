@@ -401,6 +401,13 @@
     <string name="watch_party_status_paused">Paused</string>
     <string name="watch_party_status_buffering">Buffering</string>
     <string name="watch_party_status_selecting_source">Selecting source</string>
+    <string name="watch_party_status_idle">Browsing</string>
+    <string name="compose_nav_watch_party">Watch Party</string>
+    <string name="watch_party_screen_title">Watch Party</string>
+    <string name="watch_party_lobby_waiting">Waiting for content — start something to kick things off for everyone.</string>
+    <string name="watch_party_rejoin_last">Rejoin %1$s</string>
+    <string name="watch_party_now_watching">Watching: %1$s</string>
+    <string name="watch_party_open_playback">Go to playback</string>
     <string name="watch_party_toast_joined">%1$s joined</string>
     <string name="watch_party_toast_left">%1$s left</string>
     <string name="watch_party_toast_paused">%1$s paused</string>

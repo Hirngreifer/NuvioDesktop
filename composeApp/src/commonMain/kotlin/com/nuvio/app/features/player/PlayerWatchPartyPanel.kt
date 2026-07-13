@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
@@ -312,7 +313,7 @@ private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
             WatchPartyParticipantStatus.SELECTING_SOURCE ->
                 Icons.Rounded.Search to stringResource(Res.string.watch_party_status_selecting_source)
             WatchPartyParticipantStatus.IDLE ->
-                Icons.Rounded.Search to stringResource(Res.string.watch_party_status_selecting_source)
+                Icons.Rounded.Person to stringResource(Res.string.watch_party_status_idle)
         }
         Icon(
             imageVector = icon,

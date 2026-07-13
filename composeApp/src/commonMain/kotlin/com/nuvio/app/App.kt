@@ -32,10 +32,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -222,6 +225,7 @@ import com.nuvio.app.features.updater.AppUpdaterHost
 import com.nuvio.app.features.updater.rememberAppUpdaterController
 import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watchparty.WatchPartyCoordinator
+import com.nuvio.app.features.watchparty.WatchPartyScreen
 import com.nuvio.app.features.watchprogress.ContinueWatchingItem
 import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
 import com.nuvio.app.features.watchprogress.ResumePromptRepository
@@ -365,6 +369,7 @@ enum class AppScreenTab {
     Home,
     Search,
     Library,
+    WatchParty,
     Settings,
 }
 
@@ -383,6 +388,8 @@ private fun AppScreenTab.toNativeNavigationTab(): NativeNavigationTab = when (th
     AppScreenTab.Home -> NativeNavigationTab.Home
     AppScreenTab.Search -> NativeNavigationTab.Search
     AppScreenTab.Library -> NativeNavigationTab.Library
+    // WatchParty is Desktop-only; no dedicated native tab — fall back to Home
+    AppScreenTab.WatchParty -> NativeNavigationTab.Home
     AppScreenTab.Settings -> NativeNavigationTab.Settings
 }
 
@@ -832,6 +839,7 @@ private fun MainAppContent(
                 searchScrollToTopRequests.tryEmit(Unit)
             }
             AppScreenTab.Library -> libraryScrollToTopRequests.tryEmit(Unit)
+            AppScreenTab.WatchParty -> Unit
             AppScreenTab.Settings -> settingsRootActionRequests.tryEmit(Unit)
         }
     }
@@ -3222,6 +3230,13 @@ private fun AppTabHost(
                     )
                 }
 
+                AppScreenTab.WatchParty -> {
+                    WatchPartyScreen(
+                        modifier = Modifier.fillMaxSize(),
+                        onOpenPlayback = { WatchPartyCoordinator.requestManualFollow() },
+                    )
+                }
+
                 AppScreenTab.Settings -> {
                     SettingsScreen(
                         modifier = Modifier.fillMaxSize(),
@@ -3396,6 +3411,20 @@ private fun DesktopHoverSidebar(
                     )
                 }
                 DesktopSidebarItem(
+                    label = stringResource(Res.string.compose_nav_watch_party),
+                    selected = selectedTab == AppScreenTab.WatchParty,
+                    expanded = sidebarExpanded,
+                    onClick = { selectTab(AppScreenTab.WatchParty) },
+                    showBadge = WatchPartyCoordinator.sessionState.collectAsState().value.isActive,
+                ) { color ->
+                    Icon(
+                        imageVector = Icons.Filled.Groups,
+                        contentDescription = stringResource(Res.string.compose_nav_watch_party),
+                        modifier = Modifier.size(DesktopSidebarIconSize),
+                        tint = color,
+                    )
+                }
+                DesktopSidebarItem(
                     label = stringResource(Res.string.compose_settings_page_root),
                     selected = selectedTab == AppScreenTab.Settings,
                     expanded = sidebarExpanded,
@@ -3473,6 +3502,7 @@ private fun DesktopSidebarItem(
     selected: Boolean,
     expanded: Boolean,
     onClick: () -> Unit,
+    showBadge: Boolean = false,
     icon: @Composable (Color) -> Unit,
 ) {
     val tokens = MaterialTheme.nuvio
@@ -3501,16 +3531,26 @@ private fun DesktopSidebarItem(
                 ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Surface(
-                    modifier = Modifier.size(DesktopSidebarIconSlotSize),
-                    color = if (selected) tokens.colors.accent else Color.Transparent,
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
+                Box {
+                    Surface(
+                        modifier = Modifier.size(DesktopSidebarIconSlotSize),
+                        color = if (selected) tokens.colors.accent else Color.Transparent,
+                        shape = RoundedCornerShape(14.dp),
                     ) {
-                        icon(iconColor)
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            icon(iconColor)
+                        }
+                    }
+                    if (showBadge) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .align(Alignment.TopEnd)
+                                .background(tokens.colors.accent, shape = CircleShape),
+                        )
                     }
                 }
                 if (expanded) {
