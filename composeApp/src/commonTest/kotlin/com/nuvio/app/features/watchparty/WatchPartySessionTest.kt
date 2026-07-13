@@ -5,6 +5,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -178,10 +180,10 @@ class WatchPartySessionTest {
         session.onPlaybackSnapshot(testSnapshot(isPlaying = false, positionMs = 90_000L))
         // Wait for at least one real drift tick (50 ms interval).
         kotlinx.coroutines.delay(200L)
+        scope.coroutineContext.job.cancelAndJoin()
         assertTrue(
             commands.filterIsInstance<WatchPartyPlayerCommand.SeekTo>().any { it.positionMs == 100_000L },
             "drift loop must realign the player, got: $commands",
         )
-        scope.cancel()
     }
 }
