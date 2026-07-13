@@ -71,8 +71,8 @@ object WatchPartyCoordinator {
     private var launchFollowActive = false
     private var collectJobs = mutableListOf<Job>()
 
-    var lastRoomCode: String? = WatchPartyPreferencesStorage.loadLastRoomCode()
-        private set
+    private val _lastRoomCode = MutableStateFlow<String?>(WatchPartyPreferencesStorage.loadLastRoomCode())
+    val lastRoomCode: StateFlow<String?> = _lastRoomCode.asStateFlow()
 
     val isConfigured: Boolean get() = WatchPartySupabaseProvider.isConfigured
 
@@ -107,7 +107,7 @@ object WatchPartyCoordinator {
         scope.launch {
             runCatching { start(session, resolveDisplayName()) }
                 .onSuccess { code ->
-                    lastRoomCode = code
+                    _lastRoomCode.value = code
                     WatchPartyPreferencesStorage.saveLastRoomCode(code)
                 }
                 .onFailure { error ->
@@ -119,7 +119,7 @@ object WatchPartyCoordinator {
 
     fun leave() {
         val session = _session.value ?: return
-        lastRoomCode = null
+        _lastRoomCode.value = null
         WatchPartyPreferencesStorage.clearLastRoomCode()
         resetSession()
         scope.launch { session.leave() }

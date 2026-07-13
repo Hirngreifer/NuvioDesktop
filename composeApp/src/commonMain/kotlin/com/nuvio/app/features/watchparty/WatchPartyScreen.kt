@@ -73,6 +73,7 @@ fun WatchPartyScreen(
 ) {
     val sessionState by WatchPartyCoordinator.sessionState.collectAsState()
     val roomContent by WatchPartyCoordinator.roomContent.collectAsState()
+    val lastRoomCode by WatchPartyCoordinator.lastRoomCode.collectAsState()
     var codeInput by rememberSaveable { mutableStateOf("") }
 
     val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -89,7 +90,7 @@ fun WatchPartyScreen(
                     .padding(top = statusBarPadding + NuvioTokens.Space.s24, start = NuvioTokens.Space.s20, end = NuvioTokens.Space.s20),
                 codeInput = codeInput,
                 onCodeInputChange = { codeInput = it },
-                lastRoomCode = WatchPartyCoordinator.lastRoomCode,
+                lastRoomCode = lastRoomCode,
                 isConfigured = WatchPartyCoordinator.isConfigured,
                 onCreate = { WatchPartyCoordinator.createRoom() },
                 onJoin = { code -> WatchPartyCoordinator.joinRoom(code) },
