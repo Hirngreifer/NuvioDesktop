@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.VideoLibrary
@@ -89,6 +90,8 @@ internal fun PlayerControlsShell(
     onVideoSettingsClick: (() -> Unit)? = null,
     onSourcesClick: (() -> Unit)? = null,
     onEpisodesClick: (() -> Unit)? = null,
+    onWatchPartyClick: (() -> Unit)? = null,
+    watchPartyParticipantCount: Int = 0,
     onOpenInExternalPlayer: (() -> Unit)? = null,
     onSubmitIntroClick: (() -> Unit)? = null,
     parentalWarnings: List<ParentalWarning> = emptyList(),
@@ -197,6 +200,8 @@ internal fun PlayerControlsShell(
                     onAudioClick = onAudioClick,
                     onSourcesClick = onSourcesClick,
                     onEpisodesClick = onEpisodesClick,
+                    onWatchPartyClick = onWatchPartyClick,
+                    watchPartyParticipantCount = watchPartyParticipantCount,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
@@ -512,6 +517,8 @@ private fun ProgressControls(
     onAudioClick: () -> Unit,
     onSourcesClick: (() -> Unit)? = null,
     onEpisodesClick: (() -> Unit)? = null,
+    onWatchPartyClick: (() -> Unit)? = null,
+    watchPartyParticipantCount: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val durationMs = playbackSnapshot.durationMs.coerceAtLeast(1L)
@@ -591,6 +598,17 @@ private fun ProgressControls(
                             label = stringResource(Res.string.compose_player_episodes),
                             icon = Icons.Rounded.VideoLibrary,
                             onClick = onEpisodesClick,
+                        )
+                    }
+                    if (onWatchPartyClick != null) {
+                        PlayerActionPillButton(
+                            label = if (watchPartyParticipantCount > 0) {
+                                stringResource(Res.string.compose_player_watch_party_with_count, watchPartyParticipantCount)
+                            } else {
+                                stringResource(Res.string.compose_player_watch_party)
+                            },
+                            icon = Icons.Rounded.Groups,
+                            onClick = onWatchPartyClick,
                         )
                     }
                 }
