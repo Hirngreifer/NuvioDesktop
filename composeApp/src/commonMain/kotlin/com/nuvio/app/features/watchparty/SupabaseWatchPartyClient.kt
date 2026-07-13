@@ -49,6 +49,7 @@ class SupabaseWatchPartyClient(
 
     override suspend fun join(roomCode: String, presence: WatchPartyPresencePayload) {
         _connectionState.value = WatchPartyConnectionState.CONNECTING
+        presenceByActor.clear()
         val presenceKey = presence.actorId
         val ch = supabase.channel("watchparty:$roomCode") {
             broadcast {
@@ -89,7 +90,7 @@ class SupabaseWatchPartyClient(
                     RealtimeChannel.Status.SUBSCRIBING -> WatchPartyConnectionState.CONNECTING
                     else -> WatchPartyConnectionState.DISCONNECTED
                 }
-                if (!wasConnected && _connectionState.value == WatchPartyConnectionState.CONNECTED) {
+                if (lastTrackedPayload != null && !wasConnected && _connectionState.value == WatchPartyConnectionState.CONNECTED) {
                     // Reconnect: presence must be re-tracked or we vanish from the room.
                     lastTrackedPayload?.let { payload ->
                         runCatching { track(payload) }
