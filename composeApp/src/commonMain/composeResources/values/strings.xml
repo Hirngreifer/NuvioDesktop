@@ -401,6 +401,15 @@
     <string name="watch_party_status_paused">Paused</string>
     <string name="watch_party_status_buffering">Buffering</string>
     <string name="watch_party_status_selecting_source">Selecting source</string>
+    <string name="watch_party_toast_joined">%1$s joined</string>
+    <string name="watch_party_toast_left">%1$s left</string>
+    <string name="watch_party_toast_paused">%1$s paused</string>
+    <string name="watch_party_toast_resumed">%1$s resumed</string>
+    <string name="watch_party_toast_seeked">%1$s jumped to %2$s</string>
+    <string name="watch_party_toast_buffering">Waiting for %1$s (buffering)…</string>
+    <string name="watch_party_prompt_title">The room is now watching %1$s</string>
+    <string name="watch_party_prompt_show_episodes">Show episodes</string>
+    <string name="watch_party_prompt_dismiss">Dismiss</string>
     <string name="compose_player_style">Style</string>
     <string name="compose_player_select_addon_subtitle_first">Select an addon subtitle first</string>
     <string name="compose_player_subs">Subs</string>

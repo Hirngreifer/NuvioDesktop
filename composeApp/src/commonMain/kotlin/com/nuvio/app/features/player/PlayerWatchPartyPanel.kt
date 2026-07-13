@@ -53,6 +53,7 @@ import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.watchparty.WatchPartyConnectionState
+import com.nuvio.app.features.watchparty.WatchPartyContentId
 import com.nuvio.app.features.watchparty.WatchPartyParticipant
 import com.nuvio.app.features.watchparty.WatchPartyParticipantStatus
 import com.nuvio.app.features.watchparty.WatchPartyRoomCodes
@@ -91,6 +92,19 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
         onJoinRoom = { code -> joinWatchPartyRoom(code) },
         onLeave = { leaveWatchParty() },
         onDismiss = { showWatchPartyPanel = false },
+    )
+
+    WatchPartyToastOverlay(toast = watchPartyToast)
+
+    val prompt = watchPartyContentPrompt
+    WatchPartyContentPromptOverlay(
+        prompt = prompt,
+        canShowEpisodes = prompt != null && prompt.metaId == parentMetaId && isSeries,
+        onShowEpisodes = {
+            watchPartyContentPrompt = null
+            openEpisodesPanel()
+        },
+        onDismiss = { watchPartyContentPrompt = null },
     )
 }
 
@@ -308,5 +322,79 @@ private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
             text = participant.displayName,
             style = MaterialTheme.typography.bodyMedium,
         )
+    }
+}
+
+@Composable
+private fun WatchPartyToastOverlay(toast: WatchPartyToastState?) {
+    // Keep the last toast rendered during the exit animation
+    // (same trick as renderedGestureFeedback in the runtime effects).
+    var rendered by remember { mutableStateOf<WatchPartyToastState?>(null) }
+    LaunchedEffect(toast) {
+        if (toast != null) rendered = toast
+    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = toast != null,
+            enter = fadeIn(tween(NuvioTokens.Motion.normalMillis)),
+            exit = fadeOut(tween(NuvioTokens.Motion.normalMillis)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 24.dp),
+        ) {
+            val current = rendered ?: return@AnimatedVisibility
+            Surface(
+                color = Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(20.dp)),
+            ) {
+                Text(
+                    // Resolve the StringResource HERE in the composable, never in the collector.
+                    text = stringResource(current.messageRes, *current.args.toTypedArray()),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchPartyContentPromptOverlay(
+    prompt: WatchPartyContentId?,
+    canShowEpisodes: Boolean,
+    onShowEpisodes: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (prompt == null) return
+    val tokens = MaterialTheme.nuvio
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxWidth(0.85f)
+                .clip(tokens.shapes.playerPanel)
+                .background(tokens.colors.surfaceSheet)
+                .border(tokens.borders.thin, tokens.colors.borderDefault, tokens.shapes.playerPanel),
+        ) {
+            Column(modifier = Modifier.padding(tokens.spacing.sheetPadding)) {
+                Text(
+                    text = stringResource(Res.string.watch_party_prompt_title, prompt.displayTitle),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (canShowEpisodes) {
+                        Button(onClick = onShowEpisodes) {
+                            Text(stringResource(Res.string.watch_party_prompt_show_episodes))
+                        }
+                    }
+                    OutlinedButton(onClick = onDismiss) {
+                        Text(stringResource(Res.string.watch_party_prompt_dismiss))
+                    }
+                }
+            }
+        }
     }
 }

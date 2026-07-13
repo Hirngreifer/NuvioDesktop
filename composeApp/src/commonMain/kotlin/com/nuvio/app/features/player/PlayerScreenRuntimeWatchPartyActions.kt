@@ -9,12 +9,20 @@ import co.touchlab.kermit.Logger
 import com.nuvio.app.features.trakt.TraktPlatformClock
 import com.nuvio.app.features.watchparty.SupabaseWatchPartyClient
 import com.nuvio.app.features.watchparty.WatchPartyContentId
+import com.nuvio.app.features.watchparty.WatchPartyEvent
 import com.nuvio.app.features.watchparty.WatchPartyPlaybackSnapshot
 import com.nuvio.app.features.watchparty.WatchPartyPlayerCommand
 import com.nuvio.app.features.watchparty.WatchPartyRoomCodes
 import com.nuvio.app.features.watchparty.WatchPartySession
 import com.nuvio.app.features.watchparty.WatchPartySessionState
 import com.nuvio.app.features.watchparty.WatchPartySupabaseProvider
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.watch_party_toast_buffering
+import nuvio.composeapp.generated.resources.watch_party_toast_joined
+import nuvio.composeapp.generated.resources.watch_party_toast_left
+import nuvio.composeapp.generated.resources.watch_party_toast_paused
+import nuvio.composeapp.generated.resources.watch_party_toast_resumed
+import nuvio.composeapp.generated.resources.watch_party_toast_seeked
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -124,6 +132,29 @@ internal fun PlayerScreenRuntime.showWatchPartyToast(toast: WatchPartyToastState
     }
 }
 
+internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
+    when (event) {
+        is WatchPartyEvent.ParticipantJoined ->
+            showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_joined, listOf(event.displayName)))
+        is WatchPartyEvent.ParticipantLeft ->
+            showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_left, listOf(event.displayName)))
+        is WatchPartyEvent.RemotePaused ->
+            showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_paused, listOf(event.displayName)))
+        is WatchPartyEvent.RemoteResumed ->
+            showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_resumed, listOf(event.displayName)))
+        is WatchPartyEvent.RemoteSeeked ->
+            showWatchPartyToast(
+                WatchPartyToastState(
+                    Res.string.watch_party_toast_seeked,
+                    listOf(event.displayName, formatPlaybackTime(event.positionMs)),
+                ),
+            )
+        is WatchPartyEvent.BufferHold ->
+            showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_buffering, listOf(event.displayName)))
+        is WatchPartyEvent.ContentPrompt -> watchPartyContentPrompt = event.contentId
+    }
+}
+
 @Composable
 internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
     val session = watchPartySession
@@ -154,6 +185,9 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
                     watchPartyContentPrompt = null
                 }
             }
+        }
+        launch {
+            session.events.collect { handleWatchPartyEvent(it) }
         }
     }
 
