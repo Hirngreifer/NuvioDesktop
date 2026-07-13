@@ -63,9 +63,14 @@ class FakeWatchPartyClient(private val room: FakeWatchPartyRoom) : WatchPartyCli
     var presenceUpdateCount: Int = 0
         private set
 
+    // Last presence payload sent via updatePresence() (excludes the initial join payload).
+    var lastPresencePayload: WatchPartyPresencePayload? = null
+        private set
+
     override suspend fun updatePresence(payload: WatchPartyPresencePayload) {
         presenceUpdateCount++
         currentPresence = payload
+        lastPresencePayload = payload
         room.publishPresence()
     }
 
@@ -76,4 +81,7 @@ class FakeWatchPartyClient(private val room: FakeWatchPartyRoom) : WatchPartyCli
     fun deliverPresence(payloads: List<WatchPartyPresencePayload>) {
         check(_presence.tryEmit(payloads)) { "presence buffer overflow in fake" }
     }
+
+    /** Emit a room state as if it arrived from the Supabase channel (for Session-level tests). */
+    fun emitState(state: WatchPartyRoomState) = deliverState(state)
 }

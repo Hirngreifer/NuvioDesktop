@@ -14,7 +14,31 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+// Second content id for multi-episode tests (EP1 lives in ContentChangeTest but is private there).
+private val EP2 = WatchPartyContentId("tt1", "series", 1, 2, "Ep 2")
+
 class WatchPartySessionTest {
+
+    /** Creates a session + its fake client. [presenceMinIntervalMs] and
+     *  [presenceUrgentMinIntervalMs] can be overridden to exercise throttle paths. */
+    private fun createSession(
+        presenceMinIntervalMs: Long = 8_000L,
+        presenceUrgentMinIntervalMs: Long = 1_000L,
+    ): Pair<WatchPartySession, FakeWatchPartyClient> {
+        val room = FakeWatchPartyRoom()
+        val client = room.client()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = WatchPartySession(
+            client = client,
+            scope = scope,
+            nowMs = { 1_000_000L },
+            actorId = "actor-a",
+            driftTickIntervalMs = 3_600_000L,
+            presenceMinIntervalMs = presenceMinIntervalMs,
+            presenceUrgentMinIntervalMs = presenceUrgentMinIntervalMs,
+        )
+        return session to client
+    }
 
     @Test
     fun twoParticipantsJoinPlaySeekBufferResumeLeave() = runBlocking {
@@ -217,6 +241,7 @@ class WatchPartySessionTest {
             actorId = "actor-a",
             driftTickIntervalMs = 3_600_000L,
             presenceMinIntervalMs = 50L,
+            presenceUrgentMinIntervalMs = 50L,
         )
         session.join("ABCD23", "Anna")
         session.onContentChanged(testContent())
@@ -238,5 +263,86 @@ class WatchPartySessionTest {
 
         session.leave()
         scope.cancel()
+    }
+
+    // ── Task-3 tests ─────────────────────────────────────────────────────────
+
+    @Test
+    fun selectingSourceMapsToIdleWhileNotFollowing() = runBlocking {
+        // A session joined without content (menu-join): initial presence carries IDLE,
+        // and an engine SELECTING_SOURCE (content == null) is reported as IDLE.
+        val (session, client) = createSession()
+        session.join("ABCDEF", "Anna")
+        assertEquals(WatchPartyParticipantStatus.IDLE, client.currentPresence?.status,
+            "initial join presence must be IDLE")
+
+        // onContentChanged(null) → engine outputs SELECTING_SOURCE; must be mapped to IDLE
+        // because isFollowing == false. With Unconfined the launch runs synchronously.
+        session.onContentChanged(null)
+        assertEquals(WatchPartyParticipantStatus.IDLE, client.lastPresencePayload?.status,
+            "SELECTING_SOURCE without follow must map to IDLE")
+    }
+
+    @Test
+    fun followingFlagRestoresSelectingSource() = runBlocking {
+        val (session, client) = createSession(presenceUrgentMinIntervalMs = 0L)
+        session.join("ABCDEF", "Anna")
+        // Deliver a remote state so lastKnownState = EP2 (different from testContent).
+        // With Unconfined, emitState() is processed synchronously before the next line.
+        // The engine sets lastPresenceStatus = SELECTING_SOURCE (local content is null → mismatch).
+        client.emitState(
+            roomState(content = EP2, isPlaying = false, positionMs = 0L,
+                actorId = "other", seq = 1L, reason = WatchPartyStateReason.CONTENT_CHANGE),
+        )
+        // Set local content to testContent() (≠ EP2) — engine deduplicates SELECTING_SOURCE
+        // (lastPresenceStatus is already SELECTING_SOURCE so presenceStatus output is null),
+        // but lastEngineStatus in the session is already SELECTING_SOURCE from the emitState step.
+        session.onContentChanged(testContent())
+
+        // Now setFollowing(true): isFollowing flips, mappedStatus(SELECTING_SOURCE) = SELECTING_SOURCE,
+        // and the urgent presence fires immediately (presenceUrgentMinIntervalMs = 0).
+        session.setFollowing(true)
+        // With Unconfined the internal launch in setFollowing() runs synchronously.
+        assertEquals(WatchPartyParticipantStatus.SELECTING_SOURCE, client.lastPresencePayload?.status,
+            "follow active + content mismatch → SELECTING_SOURCE must be visible for all-ready rule")
+    }
+
+    @Test
+    fun statusChangesBypassThePresenceThrottleWindow() = runBlocking {
+        // presenceMinIntervalMs very large, presenceUrgentMinIntervalMs = 0:
+        // a status-change (urgent) goes out immediately even though the 8s window is closed.
+        val (session, client) = createSession(
+            presenceMinIntervalMs = 60_000L,
+            presenceUrgentMinIntervalMs = 0L,
+        )
+        session.join("ABCDEF", "Anna")
+        // Trigger lastEngineStatus to be set (non-urgent path on first event after join).
+        session.onContentChanged(null)
+        val countAfterInit = client.presenceUpdateCount
+
+        session.setFollowing(true)   // Status-change IDLE → SELECTING_SOURCE, urgent path
+        assertTrue(client.presenceUpdateCount > countAfterInit,
+            "urgent status-change must bypass the 60s throttle window")
+    }
+
+    @Test
+    fun roomContentFlowTracksLatestState() = runBlocking {
+        val (session, client) = createSession()
+        session.join("ABCDEF", "Anna")
+
+        val state = roomState(
+            content = EP2,
+            isPlaying = false,
+            positionMs = 0L,
+            actorId = "other",
+            seq = 3L,
+            reason = WatchPartyStateReason.CONTENT_CHANGE,
+        )
+        client.emitState(state)
+        // Unconfined: collect runs synchronously, so roomContent is updated already.
+        assertEquals(EP2, session.roomContent.value,
+            "roomContent must reflect the latest incoming room state's contentId")
+        assertEquals(3L, session.latestRoomState()?.seq,
+            "latestRoomState() must return the engine's lastKnownState")
     }
 }

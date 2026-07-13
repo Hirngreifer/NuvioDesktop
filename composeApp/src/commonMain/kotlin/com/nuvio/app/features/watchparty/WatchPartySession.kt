@@ -46,6 +46,7 @@ class WatchPartySession(
     private val driftTickIntervalMs: Long = 10_000L,
     private val engineConfig: WatchPartySyncConfig = WatchPartySyncConfig(),
     private val presenceMinIntervalMs: Long = 8_000L,
+    private val presenceUrgentMinIntervalMs: Long = 1_000L,
 ) {
     private val log = Logger.withTag("WatchPartySession")
     private val engine = WatchPartySyncEngine(actorId, engineConfig)
@@ -59,6 +60,11 @@ class WatchPartySession(
     private val _events = MutableSharedFlow<WatchPartyEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<WatchPartyEvent> = _events.asSharedFlow()
 
+    private val _roomContent = MutableStateFlow<WatchPartyContentId?>(null)
+    val roomContent: StateFlow<WatchPartyContentId?> = _roomContent.asStateFlow()
+
+    fun latestRoomState(): WatchPartyRoomState? = engine.lastKnownState
+
     private val collectJobs = mutableListOf<Job>()
     private var displayName: String = ""
     private var participantNames: Map<String, String> = emptyMap()
@@ -68,6 +74,11 @@ class WatchPartySession(
     private var lastPresenceSentAtMs: Long = Long.MIN_VALUE / 2
     private var pendingPresence: WatchPartyPresencePayload? = null
     private var presenceFlushJob: Job? = null
+
+    // Following flag: when true SELECTING_SOURCE passes through; when false it maps to IDLE.
+    private var isFollowing = false
+    // Last status emitted by the engine (null before first engine output).
+    private var lastEngineStatus: WatchPartyParticipantStatus? = null
 
     suspend fun create(displayName: String): String {
         val code = WatchPartyRoomCodes.generate()
@@ -103,7 +114,7 @@ class WatchPartySession(
 
         client.join(
             code,
-            WatchPartyPresencePayload(actorId, displayName, WatchPartyParticipantStatus.PAUSED, null),
+            WatchPartyPresencePayload(actorId, displayName, WatchPartyParticipantStatus.IDLE, null),
         )
         _state.update { it.copy(isActive = true, roomCode = code) }
     }
@@ -114,11 +125,28 @@ class WatchPartySession(
         presenceFlushJob?.cancel()
         presenceFlushJob = null
         pendingPresence = null
+        isFollowing = false
+        lastEngineStatus = null
+        _roomContent.value = null
         runCatching { client.leave() }
             .onFailure { error -> log.w(error) { "Failed to leave watch party cleanly" } }
         previousParticipantIds = null
         participantNames = emptyMap()
         _state.value = WatchPartySessionState()
+    }
+
+    /** Set whether the local player is actively following the room's content selection.
+     *  When [following] becomes true, SELECTING_SOURCE passes through to presence;
+     *  when false, it is mapped to IDLE (user is in the party but not watching yet). */
+    fun setFollowing(following: Boolean) {
+        scope.launch {
+            if (isFollowing == following) return@launch
+            isFollowing = following
+            // Re-announce the mapped status immediately so IDLE/SELECTING_SOURCE
+            // flips reach the all-ready rule without waiting for the next event.
+            val status = lastEngineStatus ?: return@launch
+            sendPresenceThrottled(buildPresencePayload(status), urgent = true)
+        }
     }
 
     fun onPlaybackSnapshot(snapshot: WatchPartyPlaybackSnapshot) {
@@ -187,24 +215,43 @@ class WatchPartySession(
         // client.join(); the next event after activation re-syncs the metadata.
         val shouldUpdatePresence = _state.value.isActive &&
             (output.broadcast != null || output.presenceStatus != null)
+        if (output.presenceStatus != null) lastEngineStatus = output.presenceStatus
         if (shouldUpdatePresence) {
-            val status = output.presenceStatus
-                ?: _state.value.participants.firstOrNull { it.id == actorId }?.status
-                ?: WatchPartyParticipantStatus.PAUSED
-            sendPresenceThrottled(WatchPartyPresencePayload(actorId, displayName, status, engine.lastKnownState))
+            val engineStatus = output.presenceStatus
+                ?: lastEngineStatus
+                ?: WatchPartyParticipantStatus.IDLE
+            sendPresenceThrottled(
+                buildPresencePayload(engineStatus),
+                urgent = output.presenceStatus != null,
+            )
         }
         output.contentPrompt?.let { _events.emit(WatchPartyEvent.ContentPrompt(it)) }
+        _roomContent.value = engine.lastKnownState?.contentId
     }
 
+    // Maps SELECTING_SOURCE → IDLE when not following (user is in the party but
+    // browsing locally, not yet locked to the room content).
+    private fun mappedStatus(engineStatus: WatchPartyParticipantStatus): WatchPartyParticipantStatus =
+        if (engineStatus == WatchPartyParticipantStatus.SELECTING_SOURCE && !isFollowing) {
+            WatchPartyParticipantStatus.IDLE
+        } else {
+            engineStatus
+        }
+
+    private fun buildPresencePayload(engineStatus: WatchPartyParticipantStatus): WatchPartyPresencePayload =
+        WatchPartyPresencePayload(actorId, displayName, mappedStatus(engineStatus), engine.lastKnownState)
+
     /**
-     * Sends at most one presence update per [presenceMinIntervalMs]; updates inside
-     * the window are coalesced into a single trailing flush carrying the newest
-     * payload. Keeps us well below Realtime's per-client presence rate limit.
+     * Sends at most one presence update per [presenceMinIntervalMs] (or
+     * [presenceUrgentMinIntervalMs] when [urgent] is true); updates inside the window
+     * are coalesced into a single trailing flush carrying the newest payload.
+     * Keeps us well below Realtime's per-client presence rate limit.
      */
-    private suspend fun sendPresenceThrottled(payload: WatchPartyPresencePayload) {
+    private suspend fun sendPresenceThrottled(payload: WatchPartyPresencePayload, urgent: Boolean = false) {
         val now = nowMs()
         val elapsed = now - lastPresenceSentAtMs
-        if (elapsed >= presenceMinIntervalMs) {
+        val requiredIntervalMs = if (urgent) presenceUrgentMinIntervalMs else presenceMinIntervalMs
+        if (elapsed >= requiredIntervalMs) {
             lastPresenceSentAtMs = now
             pendingPresence = null
             presenceFlushJob?.cancel()
@@ -212,8 +259,11 @@ class WatchPartySession(
             trackPresence(payload)
         } else {
             pendingPresence = payload
-            if (presenceFlushJob?.isActive != true) {
-                val waitMs = presenceMinIntervalMs - elapsed
+            val waitMs = requiredIntervalMs - elapsed
+            val existingFlush = presenceFlushJob
+            // An urgent flush may preempt a later normal flush.
+            if (existingFlush?.isActive != true || urgent) {
+                existingFlush?.cancel()
                 presenceFlushJob = scope.launch {
                     delay(waitMs)
                     val pending = pendingPresence ?: return@launch
