@@ -6,6 +6,7 @@ import com.nuvio.app.features.debrid.DebridSettingsRepository
 import com.nuvio.app.features.details.MetaVideo
 import com.nuvio.app.features.streams.StreamAutoPlayMode
 import com.nuvio.app.features.streams.StreamAutoPlaySelector
+import com.nuvio.app.features.streams.StreamAutoPlaySource
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.watchparty.WatchPartyFollowRequest
 import kotlinx.coroutines.CompletableDeferred
@@ -14,8 +15,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-
-private const val WATCH_PARTY_FOLLOW_TAG = "WatchPartyFollow"
 
 /**
  * Remote content change within the same series: load streams for the target
@@ -43,16 +42,70 @@ internal fun PlayerScreenRuntime.launchWatchPartyEpisodeFollow(request: WatchPar
 }
 
 /**
- * Mirrors the stream loading + auto-selection logic from [launchPlayerNextEpisodeAutoPlay],
- * without the countdown / next-episode-card UI concerns. Returns null when
- * [StreamAutoPlayMode.MANUAL] is active (no auto-switch in manual mode) or when no
- * suitable stream is found within the configured timeout.
+ * Mirrors the stream loading + auto-selection logic from [launchPlayerNextEpisodeAutoPlay]
+ * (lines 60–101 of PlayerNextEpisodeAutoPlay.kt), without the countdown / next-episode-card
+ * UI concerns.
+ *
+ * MANUAL-mode handling is mirrored exactly from PlayerNextEpisodeAutoPlay.kt ~60–101:
+ * - Plain MANUAL (no next-episode / binge-group exceptions): return null immediately.
+ * - MANUAL + (streamAutoPlayNextEpisodeEnabled || streamAutoPlayPreferBingeGroup):
+ *   override to FIRST_STREAM / ALL_SOURCES / empty filter sets — same as auto-next.
+ *
+ * Returns null when no suitable stream is found within the configured timeout.
  */
 private suspend fun PlayerScreenRuntime.autoSelectStreamForEpisode(target: MetaVideo): StreamItem? {
     val settings = playerSettingsUiState
 
-    // In MANUAL mode the user picks their own stream — do not force-switch.
-    if (settings.streamAutoPlayMode == StreamAutoPlayMode.MANUAL) return null
+    // Mirror PlayerNextEpisodeAutoPlay.kt lines 60–70: compute shouldAutoSelectInManualMode
+    // and bingeGroupOnlyManualMode before deciding whether MANUAL means "return null".
+    val shouldAutoSelectInManualMode =
+        settings.streamAutoPlayMode == StreamAutoPlayMode.MANUAL &&
+            (
+                settings.streamAutoPlayNextEpisodeEnabled ||
+                    settings.streamAutoPlayPreferBingeGroup
+                )
+
+    val bingeGroupOnlyManualMode =
+        shouldAutoSelectInManualMode &&
+            !settings.streamAutoPlayNextEpisodeEnabled &&
+            settings.streamAutoPlayPreferBingeGroup
+
+    // Plain MANUAL without any auto-next/binge-group exception: do not force-switch.
+    if (settings.streamAutoPlayMode == StreamAutoPlayMode.MANUAL && !shouldAutoSelectInManualMode) {
+        return null
+    }
+
+    // Mirror PlayerNextEpisodeAutoPlay.kt lines 72–101: override effective parameters.
+    val effectiveMode = if (shouldAutoSelectInManualMode) {
+        StreamAutoPlayMode.FIRST_STREAM
+    } else {
+        settings.streamAutoPlayMode
+    }
+    val effectiveSource = if (shouldAutoSelectInManualMode) {
+        StreamAutoPlaySource.ALL_SOURCES
+    } else {
+        settings.streamAutoPlaySource
+    }
+    val effectiveSelectedAddons = if (shouldAutoSelectInManualMode) {
+        emptySet()
+    } else {
+        settings.streamAutoPlaySelectedAddons
+    }
+    val effectiveSelectedPlugins = if (shouldAutoSelectInManualMode) {
+        emptySet()
+    } else {
+        settings.streamAutoPlaySelectedPlugins
+    }
+    val effectiveRegex = if (shouldAutoSelectInManualMode) {
+        ""
+    } else {
+        settings.streamAutoPlayRegex
+    }
+    val preferredBingeGroup = if (settings.streamAutoPlayPreferBingeGroup) {
+        currentStreamBingeGroup
+    } else {
+        null
+    }
 
     val type = contentType ?: parentMetaType
 
@@ -69,17 +122,7 @@ private suspend fun PlayerScreenRuntime.autoSelectStreamForEpisode(target: MetaV
         .toSet()
     val debridSettings = DebridSettingsRepository.snapshot()
 
-    val effectiveMode = settings.streamAutoPlayMode
-    val effectiveSource = settings.streamAutoPlaySource
-    val effectiveSelectedAddons = settings.streamAutoPlaySelectedAddons
-    val effectiveSelectedPlugins = settings.streamAutoPlaySelectedPlugins
-    val effectiveRegex = settings.streamAutoPlayRegex
-    val preferredBingeGroup = if (settings.streamAutoPlayPreferBingeGroup) {
-        currentStreamBingeGroup
-    } else {
-        null
-    }
-
+    // Mirror PlayerNextEpisodeAutoPlay.kt lines 140–154: trySelectStream with bingeGroupOnlyManualMode.
     fun trySelectStream(streams: List<StreamItem>): StreamItem? =
         StreamAutoPlaySelector.selectAutoPlayStream(
             streams = streams,
@@ -91,7 +134,7 @@ private suspend fun PlayerScreenRuntime.autoSelectStreamForEpisode(target: MetaV
             selectedPlugins = effectiveSelectedPlugins,
             preferredBingeGroup = preferredBingeGroup,
             preferBingeGroupInSelection = settings.streamAutoPlayPreferBingeGroup,
-            bingeGroupOnly = false,
+            bingeGroupOnly = bingeGroupOnlyManualMode,
             debridEnabled = debridSettings.canResolvePlayableLinks,
             activeResolverProviderId = debridSettings.activeResolverProviderId,
         )

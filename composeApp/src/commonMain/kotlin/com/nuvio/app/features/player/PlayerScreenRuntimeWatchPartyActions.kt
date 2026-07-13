@@ -180,10 +180,14 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
         launch {
             active.events.collect { handleWatchPartyEvent(it) }
         }
-        launch {
-            WatchPartyCoordinator.followInPlayer.collect { request ->
-                launchWatchPartyEpisodeFollow(request)
-            }
+    }
+
+    // followInPlayer is app-level (not session-scoped): a session-value flip must not
+    // cancel and restart this collector, or requests emitted in that window are silently
+    // lost. Keep it in its own LaunchedEffect(Unit) whose lifetime matches the runtime.
+    LaunchedEffect(Unit) {
+        WatchPartyCoordinator.followInPlayer.collect { request ->
+            launchWatchPartyEpisodeFollow(request)
         }
     }
 
