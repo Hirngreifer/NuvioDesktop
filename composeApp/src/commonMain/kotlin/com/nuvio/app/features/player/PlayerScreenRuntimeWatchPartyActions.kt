@@ -65,12 +65,12 @@ internal fun PlayerScreenRuntime.currentWatchPartyContentId(): WatchPartyContent
 
 internal fun PlayerScreenRuntime.createWatchPartyRoom() {
     if (!WatchPartyCoordinator.isConfigured) return
-    WatchPartyCoordinator.createRoom()
+    WatchPartyCoordinator.createRoom(displayName = watchPartyDisplayName.takeIf { it.isNotBlank() })
 }
 
 internal fun PlayerScreenRuntime.joinWatchPartyRoom(code: String) {
     if (!WatchPartyCoordinator.isConfigured) return
-    WatchPartyCoordinator.joinRoom(code)
+    WatchPartyCoordinator.joinRoom(code, displayName = watchPartyDisplayName.takeIf { it.isNotBlank() })
 }
 
 internal fun PlayerScreenRuntime.leaveWatchParty() {

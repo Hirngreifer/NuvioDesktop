@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +60,7 @@ import nuvio.composeapp.generated.resources.watch_party_reconnecting
 import nuvio.composeapp.generated.resources.watch_party_rejoin_last
 import nuvio.composeapp.generated.resources.watch_party_room_code
 import nuvio.composeapp.generated.resources.watch_party_screen_title
+import nuvio.composeapp.generated.resources.watch_party_your_name
 import nuvio.composeapp.generated.resources.watch_party_status_buffering
 import nuvio.composeapp.generated.resources.watch_party_status_idle
 import nuvio.composeapp.generated.resources.watch_party_status_paused
@@ -75,6 +77,13 @@ fun WatchPartyScreen(
     val roomContent by WatchPartyCoordinator.roomContent.collectAsState()
     val lastRoomCode by WatchPartyCoordinator.lastRoomCode.collectAsState()
     var codeInput by rememberSaveable { mutableStateOf("") }
+    var nameInput by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        if (nameInput.isBlank()) {
+            nameInput = WatchPartyCoordinator.resolveDisplayName()
+        }
+    }
 
     val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
@@ -90,10 +99,12 @@ fun WatchPartyScreen(
                     .padding(top = statusBarPadding + NuvioTokens.Space.s24, start = NuvioTokens.Space.s20, end = NuvioTokens.Space.s20),
                 codeInput = codeInput,
                 onCodeInputChange = { codeInput = it },
+                nameInput = nameInput,
+                onNameInputChange = { nameInput = it },
                 lastRoomCode = lastRoomCode,
                 isConfigured = WatchPartyCoordinator.isConfigured,
-                onCreate = { WatchPartyCoordinator.createRoom() },
-                onJoin = { code -> WatchPartyCoordinator.joinRoom(code) },
+                onCreate = { WatchPartyCoordinator.createRoom(displayName = nameInput.takeIf { it.isNotBlank() }) },
+                onJoin = { code -> WatchPartyCoordinator.joinRoom(code, displayName = nameInput.takeIf { it.isNotBlank() }) },
             )
             roomContent == null -> WatchPartyLobbySection(
                 modifier = Modifier
@@ -126,6 +137,8 @@ private fun WatchPartyJoinCreateSection(
     modifier: Modifier = Modifier,
     codeInput: String,
     onCodeInputChange: (String) -> Unit,
+    nameInput: String,
+    onNameInputChange: (String) -> Unit,
     lastRoomCode: String?,
     isConfigured: Boolean,
     onCreate: () -> Unit,
@@ -171,6 +184,16 @@ private fun WatchPartyJoinCreateSection(
                     )
                 }
             }
+        }
+
+        item {
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = onNameInputChange,
+                label = { Text(stringResource(Res.string.watch_party_your_name)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         if (lastRoomCode != null) {

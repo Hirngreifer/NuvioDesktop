@@ -346,6 +346,37 @@ class WatchPartySessionTest {
             "urgent status-change must bypass the 60s throttle window")
     }
 
+    /**
+     * Finding 1: after a session has been playing (engine status PLAYING), the equivalent
+     * of onPlayerUnbound() — i.e. calling onContentChanged(null) before setFollowing(false) —
+     * must result in a final presence payload with status IDLE, not PLAYING.
+     *
+     * Without the fix, onPlayerUnbound() only called setFollowing(false) which re-announces
+     * the last engine status (PLAYING) unchanged because mappedStatus() only maps
+     * SELECTING_SOURCE→IDLE, not PLAYING→IDLE.
+     *
+     * The fix: call onContentChanged(null) first so the engine emits SELECTING_SOURCE;
+     * then setFollowing(false) re-announces mappedStatus(SELECTING_SOURCE) = IDLE.
+     */
+    @Test
+    fun contentClearedBeforeUnfollowResultsInIdle() = runBlocking {
+        val (session, client) = createSession(presenceUrgentMinIntervalMs = 0L)
+        session.join("ABCDEF", "Anna")
+        // Bring the session to PLAYING state (simulates active player).
+        session.onContentChanged(testContent())
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 30_000L))
+        assertEquals(WatchPartyParticipantStatus.PLAYING, client.lastPresencePayload?.status,
+            "precondition: session must be PLAYING before the player closes")
+
+        // Simulate the fixed onPlayerUnbound(): clear content first, then stop following.
+        // onContentChanged(null) → engine outputs SELECTING_SOURCE.
+        // setFollowing(false) re-announces mappedStatus(SELECTING_SOURCE) = IDLE.
+        session.onContentChanged(null)
+        session.setFollowing(false)
+        assertEquals(WatchPartyParticipantStatus.IDLE, client.lastPresencePayload?.status,
+            "after player closes: final presence must be IDLE, not PLAYING")
+    }
+
     @Test
     fun roomContentFlowTracksLatestState() = runBlocking {
         val (session, client) = createSession()

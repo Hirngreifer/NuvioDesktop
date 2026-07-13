@@ -76,16 +76,16 @@ object WatchPartyCoordinator {
 
     val isConfigured: Boolean get() = WatchPartySupabaseProvider.isConfigured
 
-    fun createRoom() = startSession { session, name ->
+    fun createRoom(displayName: String? = null) = startSession(displayName) { session, name ->
         val code = session.create(name)
         // create() returns the code directly — more reliable than reading state.roomCode afterwards
         code
     }
 
-    fun joinRoom(code: String) {
+    fun joinRoom(code: String, displayName: String? = null) {
         val normalized = WatchPartyRoomCodes.normalize(code)
         if (!WatchPartyRoomCodes.isValid(normalized)) return
-        startSession { session, name ->
+        startSession(displayName) { session, name ->
             session.join(normalized, name)
             // join() sets state.roomCode before returning; read it back for the caller
             normalized
@@ -93,7 +93,10 @@ object WatchPartyCoordinator {
     }
 
     @OptIn(ExperimentalUuidApi::class)
-    private fun startSession(start: suspend (WatchPartySession, String) -> String) {
+    private fun startSession(
+        displayName: String? = null,
+        start: suspend (WatchPartySession, String) -> String,
+    ) {
         if (_session.value != null || !isConfigured) return
         val session = WatchPartySession(
             client = SupabaseWatchPartyClient(WatchPartySupabaseProvider.client, scope),
@@ -105,7 +108,8 @@ object WatchPartyCoordinator {
         collectJobs += scope.launch { session.state.collect { _sessionState.value = it } }
         collectJobs += scope.launch { session.roomContent.collect { onRoomContentChanged(it) } }
         scope.launch {
-            runCatching { start(session, resolveDisplayName()) }
+            val resolvedName = displayName?.takeIf { it.isNotBlank() } ?: resolveDisplayName()
+            runCatching { start(session, resolvedName) }
                 .onSuccess { code ->
                     _lastRoomCode.value = code
                     WatchPartyPreferencesStorage.saveLastRoomCode(code)
@@ -179,6 +183,10 @@ object WatchPartyCoordinator {
     fun onPlayerUnbound() {
         playerBound = false
         boundContent.value = null
+        // Clear content first so the engine transitions to SELECTING_SOURCE; then
+        // setFollowing re-announces mappedStatus(SELECTING_SOURCE) = IDLE.
+        // Without this call the session keeps broadcasting the last PLAYING/PAUSED status.
+        _session.value?.onContentChanged(null)
         _session.value?.setFollowing(launchFollowActive)
     }
 
