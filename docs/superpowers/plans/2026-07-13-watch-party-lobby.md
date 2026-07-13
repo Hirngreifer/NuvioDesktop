@@ -486,7 +486,7 @@ git commit -m "Auto-resume coordinated content start when all participants are r
   - Konstruktor-Param `presenceUrgentMinIntervalMs: Long = 2_000L`
   - `join(roomCode, displayName)` sendet initiale Presence mit Status `IDLE` (statt `PAUSED`)
 
-**Semantik:** Die Engine meldet `SELECTING_SOURCE`, wenn kein/abweichender Content läuft. Die Session mappt das auf `IDLE`, solange KEIN Follow aktiv ist (`!isFollowing`): „in der Party, aber gerade nicht am Schauen". Status-Änderungen sind selten (Engine dedupliziert schon) und müssen SCHNELL raus, damit die All-Ready-Regel nicht auf 8 s alte Presence wartet → urgenter Pfad mit 1-s-Mindestabstand.
+**Semantik:** Die Engine meldet `SELECTING_SOURCE`, wenn kein/abweichender Content läuft. Die Session mappt das auf `IDLE`, solange KEIN Follow aktiv ist (`!isFollowing`): „in der Party, aber gerade nicht am Schauen". Status-Änderungen sind selten (Engine dedupliziert schon) und müssen SCHNELL raus, damit die All-Ready-Regel nicht auf 8 s alte Presence wartet → urgenter Pfad mit 2-s-Mindestabstand.
 
 - [ ] **Step 1: Failing Tests schreiben** (bestehende Konventionen in `WatchPartySessionTest.kt` übernehmen — Fake-Client, Unconfined-Scope, `nowMs`-Fake):
 
