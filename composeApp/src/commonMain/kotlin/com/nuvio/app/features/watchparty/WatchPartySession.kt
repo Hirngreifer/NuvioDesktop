@@ -46,7 +46,9 @@ class WatchPartySession(
     private val driftTickIntervalMs: Long = 10_000L,
     private val engineConfig: WatchPartySyncConfig = WatchPartySyncConfig(),
     private val presenceMinIntervalMs: Long = 8_000L,
-    private val presenceUrgentMinIntervalMs: Long = 1_000L,
+    // 2 s keeps urgent sends at ≤15/30 s worst-case, well within Realtime's
+    // 30-calls/30-s per-client limit even when combined with normal-path sends.
+    private val presenceUrgentMinIntervalMs: Long = 2_000L,
 ) {
     private val log = Logger.withTag("WatchPartySession")
     private val engine = WatchPartySyncEngine(actorId, engineConfig)

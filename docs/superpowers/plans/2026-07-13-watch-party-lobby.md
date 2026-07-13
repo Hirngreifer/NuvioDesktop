@@ -15,7 +15,7 @@
 - Tests laufen NUR so (Java ist nicht im PATH): `nix-shell -p jdk21 gcc --run './gradlew :composeApp:desktopTest'`
 - Engine bleibt pur und synchron (kein Player-/Netzwerk-/Clock-Zugriff, nicht thread-safe — Session serialisiert Aufrufe auf einem Dispatcher)
 - Session/Coordinator laufen auf `Dispatchers.Main` (Session verlangt Single-Thread-Serialisierung)
-- Presence-Rate-Limits: normaler Throttle bleibt 8 s (`presenceMinIntervalMs = 8_000L`); NEU: urgente Status-Updates mit Mindestabstand 1 s (`presenceUrgentMinIntervalMs = 1_000L`). Server-Limit ist 30 Calls/30 s — nicht überschreiten.
+- Presence-Rate-Limits: normaler Throttle bleibt 8 s (`presenceMinIntervalMs = 8_000L`); NEU: urgente Status-Updates mit Mindestabstand 2 s (`presenceUrgentMinIntervalMs = 2_000L`). Server-Limit ist 30 Calls/30 s — nicht überschreiten. (2 s → max 15 urgente Calls/30 s, sicherer Abstand zum Limit.)
 - Koordinierter Start: Grace `contentStartGraceMs = 5_000L`, Timeout `contentStartTimeoutMs = 60_000L` (beide in `WatchPartySyncConfig`)
 - Protokoll: additive Felder/Enum-Werte, KEINE Abwärtskompatibilität nötig (alle Clients nutzen denselben Build); `ignoreUnknownKeys = true` ist im Client bereits gesetzt
 - UI-Strings auf Englisch in `composeApp/src/commonMain/composeResources/values/strings.xml` (bestehende `watch_party_*`-Namen weiterführen, Zeilen 387–406 als Vorbild)
@@ -483,7 +483,7 @@ git commit -m "Auto-resume coordinated content start when all participants are r
   - `fun setFollowing(following: Boolean)` — Follow-Flow aktiv? Steuert das IDLE-Mapping
   - `val roomContent: StateFlow<WatchPartyContentId?>` — aktueller Raum-Content (aus `engine.lastKnownState`)
   - `fun latestRoomState(): WatchPartyRoomState?` — für Resume-Positionen
-  - Konstruktor-Param `presenceUrgentMinIntervalMs: Long = 1_000L`
+  - Konstruktor-Param `presenceUrgentMinIntervalMs: Long = 2_000L`
   - `join(roomCode, displayName)` sendet initiale Presence mit Status `IDLE` (statt `PAUSED`)
 
 **Semantik:** Die Engine meldet `SELECTING_SOURCE`, wenn kein/abweichender Content läuft. Die Session mappt das auf `IDLE`, solange KEIN Follow aktiv ist (`!isFollowing`): „in der Party, aber gerade nicht am Schauen". Status-Änderungen sind selten (Engine dedupliziert schon) und müssen SCHNELL raus, damit die All-Ready-Regel nicht auf 8 s alte Presence wartet → urgenter Pfad mit 1-s-Mindestabstand.
@@ -543,7 +543,7 @@ fun roomContentFlowTracksLatestState() = runTest {
 
 - [ ] **Step 3: Session implementieren** (`WatchPartySession.kt`):
 
-(a) Konstruktor-Parameter ergänzen: `private val presenceUrgentMinIntervalMs: Long = 1_000L,`
+(a) Konstruktor-Parameter ergänzen: `private val presenceUrgentMinIntervalMs: Long = 2_000L,`
 
 (b) Neue Felder:
 

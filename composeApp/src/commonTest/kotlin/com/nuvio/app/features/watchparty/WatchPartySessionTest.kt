@@ -228,8 +228,16 @@ class WatchPartySessionTest {
 
     @Test
     fun presenceUpdatesAreThrottledWithTrailingFlush() = runBlocking {
-        // Realtime limits presence updates per client (default 5 per 30 s);
-        // the session must coalesce rapid status changes into one deferred track.
+        // Realtime limits presence updates per client; the session must coalesce
+        // rapid broadcast-triggering updates into one deferred trailing flush.
+        //
+        // Design: presenceUrgentMinIntervalMs (40 ms) < presenceMinIntervalMs (50 ms)
+        // so the urgent path fires first during setup, giving a clean throttle-start
+        // moment.  After that, rapid user-seek broadcasts keep the status at PLAYING
+        // (output.presenceStatus == null) so the NORMAL 50 ms throttle path applies —
+        // and the urgent path cannot mask the coalescing behaviour.
+        // The urgent path itself is exercised separately by
+        // statusChangesBypassThePresenceThrottleWindow.
         var now = 1_000_000L
         val room = FakeWatchPartyRoom()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -241,20 +249,33 @@ class WatchPartySessionTest {
             actorId = "actor-a",
             driftTickIntervalMs = 3_600_000L,
             presenceMinIntervalMs = 50L,
-            presenceUrgentMinIntervalMs = 50L,
+            presenceUrgentMinIntervalMs = 40L, // < presenceMinIntervalMs; urgent fires first
         )
         session.join("ABCD23", "Anna")
+        // Content change → coordinated-start → status PAUSED, first presence sent immediately
+        // (never-sent timer, so threshold doesn't matter).
         session.onContentChanged(testContent())
-        // Initial broadcast for the empty room -> first presence update goes out immediately.
+        // Paused snapshot: no status change, no broadcast → no additional presence update.
         session.onPlaybackSnapshot(testSnapshot(isPlaying = false, positionMs = 0L))
-        val afterFirst = client.presenceUpdateCount
-        assertTrue(afterFirst >= 1, "initial presence update must be sent immediately")
 
-        // Rapid status flapping inside the window (PLAYING -> BUFFERING -> PLAYING):
-        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 0L))
-        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 50L, isBuffering = true))
-        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 100L))
-        assertEquals(afterFirst, client.presenceUpdateCount, "updates inside the window must be deferred")
+        // Advance clock past the suppress window (500 ms, set by the coordinated-start)
+        // and past both throttle intervals so the next snapshot fires immediately.
+        now += 600L
+        // PAUSED→PLAYING status change: urgent path, elapsed 600 ms > 40 ms → fires immediately.
+        // This resets lastPresenceSentAtMs to `now`, opening a fresh 50 ms throttle window.
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 3_000L))
+        val afterFirst = client.presenceUpdateCount
+        assertTrue(afterFirst >= 1, "initial playing presence must be sent immediately")
+
+        // Rapid user-seek broadcasts inside the 50 ms window: positions jump by 3 s each
+        // (> seekDetectionThresholdMs 2 s) so the engine detects a user seek and broadcasts.
+        // nowMs is fixed so expectedLocalMs = previous position; the jump always exceeds the
+        // threshold.  Status stays PLAYING throughout → presenceStatus == null → NORMAL
+        // throttle path.  suppressUntilMs expired at now−100 so suppression is not active.
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 6_000L))
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 9_000L))
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 12_000L))
+        assertEquals(afterFirst, client.presenceUpdateCount, "broadcast-only updates inside the window must be deferred")
 
         // Trailing flush delivers exactly one coalesced update after the interval.
         kotlinx.coroutines.delay(250L)
