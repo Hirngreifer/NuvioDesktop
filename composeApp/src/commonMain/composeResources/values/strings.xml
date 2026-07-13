@@ -418,6 +418,8 @@
     <string name="watch_party_prompt_show_episodes">Show episodes</string>
     <string name="watch_party_prompt_dismiss">Dismiss</string>
     <string name="watch_party_follow_failed">Could not open what the party is watching. Open it manually to rejoin the sync.</string>
+    <string name="watch_party_banner_lobby">Watch party lobby — waiting for content</string>
+    <string name="watch_party_banner_watching">Party is watching %1$s — tap to join</string>
     <string name="compose_player_style">Style</string>
     <string name="compose_player_select_addon_subtitle_first">Select an addon subtitle first</string>
     <string name="compose_player_subs">Subs</string>

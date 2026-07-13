@@ -224,6 +224,7 @@ import com.nuvio.app.features.trakt.TraktSettingsRepository
 import com.nuvio.app.features.updater.AppUpdaterHost
 import com.nuvio.app.features.updater.rememberAppUpdaterController
 import com.nuvio.app.features.watched.WatchedRepository
+import com.nuvio.app.features.watchparty.WatchPartyBannerHost
 import com.nuvio.app.features.watchparty.WatchPartyCoordinator
 import com.nuvio.app.features.watchparty.WatchPartyScreen
 import com.nuvio.app.features.watchprogress.ContinueWatchingItem
@@ -3110,6 +3111,14 @@ private fun MainAppContent(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .zIndex(15f),
+            )
+
+            WatchPartyBannerHost(
+                isPlayerVisible = currentBackStackEntry?.destination?.hasRoute<PlayerRoute>() == true,
+                onOpenTab = { handleRootTabClick(AppScreenTab.WatchParty) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(16f),
             )
 
             NuvioToastHost(
