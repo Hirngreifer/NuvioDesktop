@@ -218,10 +218,80 @@ class WatchPartySyncEngine(
         )
     }
 
-    /** Full content-change logic lands in Task 4; for now we only record the content. */
-    fun onLocalContentChanged(contentId: WatchPartyContentId?, nowMs: Long): Output {
-        localContent = contentId
+    /**
+     * Periodic silent drift correction (spec: every 10 s, tolerance 1.5 s).
+     * Never broadcasts — it only realigns the local player.
+     */
+    fun onDriftTick(nowMs: Long): Output {
+        val state = lastKnownState ?: return Output()
+        val content = localContent ?: return Output()
+        if (!state.contentId.sameContentAs(content)) return Output()
+        val snapshot = lastSnapshot ?: return Output()
+        if (snapshot.isBuffering) return Output()
+
+        val expectedMs = state.expectedPositionMs(nowMs)
+        val localMs = expectedLocalPositionMs(snapshot, nowMs)
+        if (abs(localMs - expectedMs) <= config.driftToleranceMs) return Output()
+
+        pendingSeekTargetMs = expectedMs
+        suppressUntilMs = nowMs + config.suppressWindowMs
+        return Output(commands = listOf(WatchPartyPlayerCommand.SeekTo(expectedMs)))
+    }
+
+    /**
+     * Late-join / reconnect resync: apply the newest state carried in presence
+     * metadata. An empty room without any state makes us the state owner.
+     */
+    fun onPresenceSync(states: List<WatchPartyRoomState>, nowMs: Long): Output {
+        hasReceivedPresence = true
+        var best: WatchPartyRoomState? = null
+        for (state in states) {
+            if (best == null || state.isNewerThan(best)) best = state
+        }
+        if (best != null) {
+            if (!best.isNewerThan(lastKnownState)) return Output()
+            lastKnownState = best
+            if (best.actorId == actorId) return Output()
+            return applyKnownState(nowMs)
+        }
+        val content = localContent
+        val snapshot = lastSnapshot
+        if (lastKnownState == null && content != null && snapshot != null) {
+            return Output(
+                broadcast = buildBroadcast(
+                    isPlaying = snapshot.isPlaying,
+                    positionMs = snapshot.positionMs,
+                    nowMs = nowMs,
+                    reason = WatchPartyStateReason.USER,
+                ),
+            )
+        }
         return Output()
+    }
+
+    fun onLocalContentChanged(contentId: WatchPartyContentId?, nowMs: Long): Output {
+        val previous = localContent
+        localContent = contentId
+        if (contentId == null) {
+            return Output(presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.SELECTING_SOURCE))
+        }
+        val known = lastKnownState
+        val changedByUser = previous != null && !previous.sameContentAs(contentId)
+        if (changedByUser && (known == null || !known.contentId.sameContentAs(contentId))) {
+            // The user deliberately put on something new -> it becomes the room state.
+            // Receivers get a content prompt; there is no automatic takeover on their side.
+            val snapshot = lastSnapshot
+            return Output(
+                broadcast = buildBroadcast(
+                    isPlaying = snapshot?.isPlaying ?: false,
+                    positionMs = snapshot?.positionMs ?: 0L,
+                    nowMs = nowMs,
+                    reason = WatchPartyStateReason.USER,
+                ),
+                presenceStatus = updatePresenceStatus(statusFor(snapshot)),
+            )
+        }
+        return applyKnownState(nowMs)
     }
 
     private fun statusFor(snapshot: WatchPartyPlaybackSnapshot?): WatchPartyParticipantStatus = when {
