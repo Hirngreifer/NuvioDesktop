@@ -151,7 +151,14 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
             )
         is WatchPartyEvent.BufferHold ->
             showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_buffering, listOf(event.displayName)))
-        is WatchPartyEvent.ContentPrompt -> watchPartyContentPrompt = event.contentId
+        is WatchPartyEvent.ContentPrompt -> {
+            // Diagnostic: a prompt means sameContentAs() failed — log both ids so
+            // mismatches (id form, season/episode, media type) are visible in dev runs.
+            watchPartyLog.i {
+                "Content prompt: room=${event.contentId} local=${currentWatchPartyContentId()}"
+            }
+            watchPartyContentPrompt = event.contentId
+        }
     }
 }
 

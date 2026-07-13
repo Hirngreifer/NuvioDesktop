@@ -60,7 +60,11 @@ class FakeWatchPartyClient(private val room: FakeWatchPartyRoom) : WatchPartyCli
         room.broadcastFrom(this, state)
     }
 
+    var presenceUpdateCount: Int = 0
+        private set
+
     override suspend fun updatePresence(payload: WatchPartyPresencePayload) {
+        presenceUpdateCount++
         currentPresence = payload
         room.publishPresence()
     }

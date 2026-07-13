@@ -45,6 +45,7 @@ class WatchPartySession(
     private val actorId: String,
     private val driftTickIntervalMs: Long = 10_000L,
     private val engineConfig: WatchPartySyncConfig = WatchPartySyncConfig(),
+    private val presenceMinIntervalMs: Long = 8_000L,
 ) {
     private val log = Logger.withTag("WatchPartySession")
     private val engine = WatchPartySyncEngine(actorId, engineConfig)
@@ -62,6 +63,11 @@ class WatchPartySession(
     private var displayName: String = ""
     private var participantNames: Map<String, String> = emptyMap()
     private var previousParticipantIds: Set<String>? = null
+    // Realtime enforces a per-client presence rate limit (default 5 calls per
+    // 30 s window); exceeding it kills the channel. Coalesce rapid updates.
+    private var lastPresenceSentAtMs: Long = Long.MIN_VALUE / 2
+    private var pendingPresence: WatchPartyPresencePayload? = null
+    private var presenceFlushJob: Job? = null
 
     suspend fun create(displayName: String): String {
         val code = WatchPartyRoomCodes.generate()
@@ -105,6 +111,9 @@ class WatchPartySession(
     suspend fun leave() {
         collectJobs.forEach { it.cancel() }
         collectJobs.clear()
+        presenceFlushJob?.cancel()
+        presenceFlushJob = null
+        pendingPresence = null
         runCatching { client.leave() }
             .onFailure { error -> log.w(error) { "Failed to leave watch party cleanly" } }
         previousParticipantIds = null
@@ -182,12 +191,42 @@ class WatchPartySession(
             val status = output.presenceStatus
                 ?: _state.value.participants.firstOrNull { it.id == actorId }?.status
                 ?: WatchPartyParticipantStatus.PAUSED
-            runCatching {
-                client.updatePresence(
-                    WatchPartyPresencePayload(actorId, displayName, status, engine.lastKnownState),
-                )
-            }.onFailure { error -> log.w(error) { "Failed to update watch party presence" } }
+            sendPresenceThrottled(WatchPartyPresencePayload(actorId, displayName, status, engine.lastKnownState))
         }
         output.contentPrompt?.let { _events.emit(WatchPartyEvent.ContentPrompt(it)) }
+    }
+
+    /**
+     * Sends at most one presence update per [presenceMinIntervalMs]; updates inside
+     * the window are coalesced into a single trailing flush carrying the newest
+     * payload. Keeps us well below Realtime's per-client presence rate limit.
+     */
+    private suspend fun sendPresenceThrottled(payload: WatchPartyPresencePayload) {
+        val now = nowMs()
+        val elapsed = now - lastPresenceSentAtMs
+        if (elapsed >= presenceMinIntervalMs) {
+            lastPresenceSentAtMs = now
+            pendingPresence = null
+            presenceFlushJob?.cancel()
+            presenceFlushJob = null
+            trackPresence(payload)
+        } else {
+            pendingPresence = payload
+            if (presenceFlushJob?.isActive != true) {
+                val waitMs = presenceMinIntervalMs - elapsed
+                presenceFlushJob = scope.launch {
+                    delay(waitMs)
+                    val pending = pendingPresence ?: return@launch
+                    pendingPresence = null
+                    lastPresenceSentAtMs = nowMs()
+                    trackPresence(pending)
+                }
+            }
+        }
+    }
+
+    private suspend fun trackPresence(payload: WatchPartyPresencePayload) {
+        runCatching { client.updatePresence(payload) }
+            .onFailure { error -> log.w(error) { "Failed to update watch party presence" } }
     }
 }

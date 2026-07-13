@@ -201,4 +201,42 @@ class WatchPartySessionTest {
         session.leave()
         scope.cancel()
     }
+
+    @Test
+    fun presenceUpdatesAreThrottledWithTrailingFlush() = runBlocking {
+        // Realtime limits presence updates per client (default 5 per 30 s);
+        // the session must coalesce rapid status changes into one deferred track.
+        var now = 1_000_000L
+        val room = FakeWatchPartyRoom()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val client = room.client()
+        val session = WatchPartySession(
+            client = client,
+            scope = scope,
+            nowMs = { now },
+            actorId = "actor-a",
+            driftTickIntervalMs = 3_600_000L,
+            presenceMinIntervalMs = 50L,
+        )
+        session.join("ABCD23", "Anna")
+        session.onContentChanged(testContent())
+        // Initial broadcast for the empty room -> first presence update goes out immediately.
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = false, positionMs = 0L))
+        val afterFirst = client.presenceUpdateCount
+        assertTrue(afterFirst >= 1, "initial presence update must be sent immediately")
+
+        // Rapid status flapping inside the window (PLAYING -> BUFFERING -> PLAYING):
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 0L))
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 50L, isBuffering = true))
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 100L))
+        assertEquals(afterFirst, client.presenceUpdateCount, "updates inside the window must be deferred")
+
+        // Trailing flush delivers exactly one coalesced update after the interval.
+        kotlinx.coroutines.delay(250L)
+        assertEquals(afterFirst + 1, client.presenceUpdateCount, "expected exactly one trailing flush")
+        assertEquals(WatchPartyParticipantStatus.PLAYING, client.currentPresence?.status)
+
+        session.leave()
+        scope.cancel()
+    }
 }
