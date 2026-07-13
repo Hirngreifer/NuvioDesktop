@@ -173,6 +173,9 @@ class WatchPartySession(
         }
         // Update presence when we are in a room and either broadcast or status changed —
         // presence metadata must always carry the newest state for late-joiners.
+        // Deliberately also gates the broadcast-triggered update on isActive: during the
+        // brief join window (before isActive is set) presence is delivered directly via
+        // client.join(); the next event after activation re-syncs the metadata.
         val shouldUpdatePresence = _state.value.isActive &&
             (output.broadcast != null || output.presenceStatus != null)
         if (shouldUpdatePresence) {
