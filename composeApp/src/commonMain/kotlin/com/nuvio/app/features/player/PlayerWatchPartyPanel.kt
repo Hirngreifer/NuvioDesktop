@@ -151,6 +151,9 @@ internal fun PlayerWatchPartyPanel(
 ) {
     val tokens = MaterialTheme.nuvio
     var codeInput by remember { mutableStateOf("") }
+    LaunchedEffect(visible) {
+        if (!visible) codeInput = ""
+    }
 
     AnimatedVisibility(
         visible = visible,
