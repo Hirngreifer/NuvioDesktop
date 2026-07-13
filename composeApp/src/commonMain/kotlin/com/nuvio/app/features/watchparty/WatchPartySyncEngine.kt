@@ -45,6 +45,7 @@ class WatchPartySyncEngine(
     private var bufferingSinceMs: Long? = null
     private var hasReceivedPresence: Boolean = false
     private var lastPresenceStatus: WatchPartyParticipantStatus? = null
+    private var realignOnNextSnapshot: Boolean = false
 
     fun onRemoteState(state: WatchPartyRoomState, nowMs: Long): Output {
         if (state.actorId == actorId) {
@@ -128,6 +129,13 @@ class WatchPartySyncEngine(
 
         var broadcast: WatchPartyRoomState? = null
         val commands = mutableListOf<WatchPartyPlayerCommand>()
+
+        if (realignOnNextSnapshot && contentMatches) {
+            realignOnNextSnapshot = false
+            lastSnapshot = snapshot
+            lastSnapshotAtMs = nowMs
+            return applyKnownState(nowMs)
+        }
 
         if (known == null && hasReceivedPresence && content != null) {
             // Empty room after join: we define the initial room state.
@@ -272,23 +280,38 @@ class WatchPartySyncEngine(
     fun onLocalContentChanged(contentId: WatchPartyContentId?, nowMs: Long): Output {
         val previous = localContent
         localContent = contentId
+        val contentActuallyChanged = previous != null && (contentId == null || !previous.sameContentAs(contentId))
+        if (contentActuallyChanged) {
+            // Snapshots of the previous content must not feed seek/flip detection
+            // for the new one; the first new snapshot realigns against the room.
+            lastSnapshot = null
+            bufferingSinceMs = null
+            realignOnNextSnapshot = true
+        }
         if (contentId == null) {
-            return Output(presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.SELECTING_SOURCE))
+            return Output(presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.IDLE))
         }
         val known = lastKnownState
-        val changedByUser = previous != null && !previous.sameContentAs(contentId)
-        if (changedByUser && (known == null || !known.contentId.sameContentAs(contentId))) {
-            // The user deliberately put on something new -> it becomes the room state.
-            // Receivers get a content prompt; there is no automatic takeover on their side.
-            val snapshot = lastSnapshot
+        val deliberate = contentActuallyChanged ||
+            // Lobby start: the first content while already presence-synced in a
+            // state-less room. (Room creation from the player sets content BEFORE
+            // the first presence sync — session starts collectors before join.)
+            (previous == null && hasReceivedPresence && known == null)
+        if (deliberate && (known == null || !known.contentId.sameContentAs(contentId))) {
+            // Coordinated start: the room pauses at 0:00 until every non-idle
+            // participant is ready, then auto-resumes (Task 2).
+            realignOnNextSnapshot = false
+            pendingPlayState = false
+            suppressUntilMs = nowMs + config.suppressWindowMs
             return Output(
+                commands = listOf(WatchPartyPlayerCommand.Pause),
                 broadcast = buildBroadcast(
-                    isPlaying = snapshot?.isPlaying ?: false,
-                    positionMs = snapshot?.positionMs ?: 0L,
+                    isPlaying = false,
+                    positionMs = 0L,
                     nowMs = nowMs,
-                    reason = WatchPartyStateReason.USER,
+                    reason = WatchPartyStateReason.CONTENT_CHANGE,
                 ),
-                presenceStatus = updatePresenceStatus(statusFor(snapshot)),
+                presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.PAUSED),
             )
         }
         return applyKnownState(nowMs)

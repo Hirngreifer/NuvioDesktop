@@ -312,6 +312,8 @@ private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
                 Icons.Rounded.HourglassTop to stringResource(Res.string.watch_party_status_buffering)
             WatchPartyParticipantStatus.SELECTING_SOURCE ->
                 Icons.Rounded.Search to stringResource(Res.string.watch_party_status_selecting_source)
+            WatchPartyParticipantStatus.IDLE ->
+                Icons.Rounded.Search to stringResource(Res.string.watch_party_status_selecting_source)
         }
         Icon(
             imageVector = icon,

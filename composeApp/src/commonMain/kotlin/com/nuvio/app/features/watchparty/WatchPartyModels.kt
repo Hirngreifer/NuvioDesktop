@@ -20,10 +20,10 @@ data class WatchPartyContentId(
 }
 
 @Serializable
-enum class WatchPartyStateReason { USER, BUFFER_HOLD, AUTO_RESUME }
+enum class WatchPartyStateReason { USER, BUFFER_HOLD, AUTO_RESUME, CONTENT_CHANGE }
 
 @Serializable
-enum class WatchPartyParticipantStatus { PLAYING, PAUSED, BUFFERING, SELECTING_SOURCE }
+enum class WatchPartyParticipantStatus { PLAYING, PAUSED, BUFFERING, SELECTING_SOURCE, IDLE }
 
 @Serializable
 data class WatchPartyRoomState(

@@ -3,6 +3,7 @@ package com.nuvio.app.features.watchparty
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -100,18 +101,24 @@ class WatchPartySyncEngineDriftPresenceTest {
     }
 
     @Test
-    fun emptyPresenceSyncBeforeContentDefersInitialBroadcastToNextSnapshot() {
+    fun emptyPresenceSyncBeforeContentStartsCoordinatedHold() {
+        // Lobby: presence arrives before local content (user picks content in lobby).
+        // The first onLocalContentChanged now immediately broadcasts a CONTENT_CHANGE hold.
         val engine = WatchPartySyncEngine("actor-local")
         val syncOutput = engine.onPresenceSync(emptyList(), 1_000_000L)
         assertNull(syncOutput.broadcast, "no content/snapshot yet -> nothing to broadcast")
-        engine.onLocalContentChanged(testContent(), 1_000_100L)
-        val output = engine.onSnapshot(testSnapshot(isPlaying = false, positionMs = 0L), 1_000_200L)
-        val broadcast = output.broadcast ?: error("expected deferred initial broadcast")
+        val contentOut = engine.onLocalContentChanged(testContent(), 1_000_100L)
+        val broadcast = contentOut.broadcast ?: error("expected coordinated-start hold from onLocalContentChanged")
+        assertEquals(WatchPartyStateReason.CONTENT_CHANGE, broadcast.reason)
+        assertFalse(broadcast.isPlaying)
         assertEquals(1L, broadcast.seq)
     }
 
     @Test
-    fun contentChangeToRoomContentAlignsPlayback() {
+    fun contentChangeToRoomContentAlignsPlaybackOnFirstSnapshot() {
+        // Follower switches to the room content: no Hold broadcast (room already there),
+        // but the first snapshot realigns the player (Play command) rather than doing so
+        // immediately — because lastSnapshot is cleared on the content change.
         val engine = primedEngine(
             snapshot = testSnapshot(isPlaying = false, positionMs = 0L),
             content = testContent(episode = 2),
@@ -121,20 +128,27 @@ class WatchPartySyncEngineDriftPresenceTest {
             testState(seq = 4, isPlaying = true, positionMs = 50_000L, atWallClockMs = 1_000_000L, contentId = roomContent),
             1_000_000L,
         ) // -> prompt, no commands
-        val output = engine.onLocalContentChanged(roomContent, 1_001_000L)
-        assertNull(output.contentPrompt)
-        assertTrue(WatchPartyPlayerCommand.Play in output.commands)
+        val switchOut = engine.onLocalContentChanged(roomContent, 1_001_000L)
+        assertNull(switchOut.broadcast, "follower must not take over the room")
+        assertNull(switchOut.contentPrompt)
+        // Play arrives on the first snapshot of the new content (realign path).
+        val snapOut = engine.onSnapshot(testSnapshot(isPlaying = false, positionMs = 0L), 1_001_500L)
+        assertTrue(WatchPartyPlayerCommand.Play in snapOut.commands)
     }
 
     @Test
-    fun localContentSwitchBroadcastsNewRoomState() {
+    fun localContentSwitchBroadcastsContentChangeHold() {
+        // Deliberate switch to new content broadcasts a coordinated hold (CONTENT_CHANGE),
+        // not a USER state with stale position.
         val engine = engineInPlayingRoom() // known room content = testContent(episode = 2)
         val newContent = testContent(episode = 5)
         val output = engine.onLocalContentChanged(newContent, 1_002_000L)
-        val broadcast = output.broadcast ?: error("expected content switch broadcast")
+        val broadcast = output.broadcast ?: error("expected content-change hold broadcast")
         assertEquals(newContent, broadcast.contentId)
         assertEquals(2L, broadcast.seq)
-        assertEquals(WatchPartyStateReason.USER, broadcast.reason)
+        assertEquals(WatchPartyStateReason.CONTENT_CHANGE, broadcast.reason)
+        assertFalse(broadcast.isPlaying)
+        assertEquals(0L, broadcast.positionMs)
     }
 
     @Test
@@ -148,10 +162,10 @@ class WatchPartySyncEngineDriftPresenceTest {
     }
 
     @Test
-    fun clearingContentReportsSelectingSource() {
+    fun clearingContentReportsIdlePresence() {
         val engine = engineInPlayingRoom()
         val output = engine.onLocalContentChanged(null, 1_001_000L)
-        assertEquals(WatchPartyParticipantStatus.SELECTING_SOURCE, output.presenceStatus)
+        assertEquals(WatchPartyParticipantStatus.IDLE, output.presenceStatus)
         assertNull(output.broadcast)
     }
 }
