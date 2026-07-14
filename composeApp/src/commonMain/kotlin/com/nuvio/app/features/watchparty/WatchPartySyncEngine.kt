@@ -297,9 +297,15 @@ class WatchPartySyncEngine(
         val previous = localContent
         localContent = contentId
         val contentActuallyChanged = previous != null && (contentId == null || !previous.sameContentAs(contentId))
-        if (contentActuallyChanged) {
+        // Realign also for the very FIRST content when the room state arrived before
+        // it (menu join: state via presence, then the follow-launch opens the player
+        // with autoplay) — otherwise nothing pauses the player in a paused room.
+        val firstContentIntoKnownRoom = previous == null && contentId != null && lastKnownState != null
+        if (contentActuallyChanged || firstContentIntoKnownRoom) {
             // Snapshots of the previous content must not feed seek/flip detection
             // for the new one; the first new snapshot realigns against the room.
+            // This includes the very FIRST content after a menu join: without the
+            // realign the freshly opened player autoplays past a paused room state.
             lastSnapshot = null
             bufferingSinceMs = null
             realignOnNextSnapshot = true

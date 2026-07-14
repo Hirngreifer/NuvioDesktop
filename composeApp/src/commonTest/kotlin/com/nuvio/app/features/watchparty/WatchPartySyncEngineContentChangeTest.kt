@@ -93,6 +93,27 @@ class WatchPartySyncEngineContentChangeTest {
     }
 
     @Test
+    fun menuJoinIntoPausedRoomAlignsFirstSnapshot() {
+        // Menu join: the room state arrives BEFORE any local content exists. When
+        // the follow-launch then opens the player (autoplay!), the very first
+        // snapshot must realign against the paused room instead of running off.
+        val engine = WatchPartySyncEngine("me")
+        engine.onRemoteState(
+            roomState(content = EP1, isPlaying = false, positionMs = 60_000L, actorId = "other", seq = 5),
+            nowMs = 1_000L,
+        )
+        val contentOut = engine.onLocalContentChanged(EP1, nowMs = 2_000L)
+        assertNull(contentOut.broadcast)
+
+        val out = engine.onSnapshot(
+            WatchPartyPlaybackSnapshot(isPlaying = true, positionMs = 60_200L, isBuffering = false),
+            nowMs = 3_000L,
+        )
+        assertTrue(WatchPartyPlayerCommand.Pause in out.commands)
+        assertNull(out.broadcast)
+    }
+
+    @Test
     fun clearedContentReportsIdlePresence() {
         val engine = WatchPartySyncEngine("me")
         engine.onLocalContentChanged(EP1, nowMs = 1_000L)

@@ -42,8 +42,11 @@ fun WatchPartyBannerHost(
 ) {
     val sessionState by WatchPartyCoordinator.sessionState.collectAsStateWithLifecycle()
     val roomContent by WatchPartyCoordinator.roomContent.collectAsStateWithLifecycle()
+    val followLaunchInProgress by WatchPartyCoordinator.followLaunchInProgress.collectAsStateWithLifecycle()
 
-    val show = sessionState.isActive && !isPlayerVisible
+    // While a follow-launch has the stream picker open the user is already on
+    // their way to the room content — nagging them with the banner is noise.
+    val show = sessionState.isActive && !isPlayerVisible && !followLaunchInProgress
 
     val navBarBottom = nuvioBottomNavigationBarInsets()
         .asPaddingValues()

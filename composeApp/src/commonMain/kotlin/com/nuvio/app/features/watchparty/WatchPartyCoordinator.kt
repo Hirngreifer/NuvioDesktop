@@ -71,7 +71,10 @@ object WatchPartyCoordinator {
     private val boundContent = MutableStateFlow<WatchPartyContentId?>(null)
     private var playerBound = false
     private var playerDetached = false
-    private var launchFollowActive = false
+    // Exposed so the banner can stay hidden while a follow-launch has the
+    // stream picker open — the user is already on their way to the room content.
+    private val _followLaunchInProgress = MutableStateFlow(false)
+    val followLaunchInProgress: StateFlow<Boolean> = _followLaunchInProgress.asStateFlow()
     private var collectJobs = mutableListOf<Job>()
 
     private val _lastRoomCode = MutableStateFlow<String?>(WatchPartyPreferencesStorage.loadLastRoomCode())
@@ -151,7 +154,7 @@ object WatchPartyCoordinator {
         boundContent.value = null
         playerBound = false
         playerDetached = false
-        launchFollowActive = false
+        _followLaunchInProgress.value = false
     }
 
     private fun onRoomContentChanged(content: WatchPartyContentId?) {
@@ -169,7 +172,7 @@ object WatchPartyCoordinator {
             WatchPartyFollowRoute.IN_PLAYER ->
                 _followInPlayer.tryEmit(buildFollowRequest(content!!, session))
             WatchPartyFollowRoute.VIA_LAUNCH -> {
-                launchFollowActive = true
+                _followLaunchInProgress.value = true
                 session.setFollowing(true)
                 _followViaLaunch.tryEmit(buildFollowRequest(content!!, session))
             }
@@ -194,7 +197,7 @@ object WatchPartyCoordinator {
     }
 
     fun onPlayerBoundContent(contentId: WatchPartyContentId?) {
-        launchFollowActive = false
+        _followLaunchInProgress.value = false
         playerBound = true
         playerDetached = false
         boundContent.value = contentId
@@ -206,17 +209,17 @@ object WatchPartyCoordinator {
         // An unbind during a running launch-follow is the old player disposing on the
         // way to the new content — not the user leaving playback. Marking it detached
         // would swallow follow routing for content changes in that window.
-        playerDetached = !launchFollowActive
+        playerDetached = !_followLaunchInProgress.value
         boundContent.value = null
         // Clear content first so the engine transitions to SELECTING_SOURCE; then
         // setFollowing re-announces mappedStatus(SELECTING_SOURCE) = IDLE.
         // Without this call the session keeps broadcasting the last PLAYING/PAUSED status.
         _session.value?.onContentChanged(null)
-        _session.value?.setFollowing(launchFollowActive)
+        _session.value?.setFollowing(_followLaunchInProgress.value)
     }
 
     fun markLaunchFollowFinished() {
-        launchFollowActive = false
+        _followLaunchInProgress.value = false
         if (!playerBound) _session.value?.setFollowing(false)
     }
 
