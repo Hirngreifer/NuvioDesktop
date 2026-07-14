@@ -1420,7 +1420,13 @@ private:
                 setMpvOptionStringLocked("hwdec", "d3d11va");
                 setMpvOptionStringLocked("d3d11-adapter", "NVIDIA");
             } else {
-                setMpvOptionStringLocked("gpu-api", "auto");
+                // Fork deviation from upstream (which uses "auto" here since
+                // "fix: adjust buffer cache"): with gpu-api=auto, gpu-next
+                // prefers Vulkan, and a Vulkan swapchain on a foreign
+                // embedded HWND (wid=containerHwnd) black-screens on some
+                // machines. d3d11 is what this embedding shipped with all
+                // along.
+                setMpvOptionStringLocked("gpu-api", "d3d11");
                 setMpvOptionStringLocked("hwdec", "auto");
             }
             setMpvOptionStringLocked("hwdec-codecs", "all");
