@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,10 +33,12 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -210,12 +213,14 @@ internal fun PlayerWatchPartyPanel(
                             text = stringResource(Res.string.watch_party_panel_title),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
+                            color = tokens.colors.textPrimary,
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         when {
                             !isConfigured -> Text(
                                 text = stringResource(Res.string.watch_party_not_configured),
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = tokens.colors.textMuted,
                             )
                             !sessionState.isActive -> {
                                 OutlinedTextField(
@@ -224,6 +229,15 @@ internal fun PlayerWatchPartyPanel(
                                     label = { Text(stringResource(Res.string.watch_party_your_name)) },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = tokens.colors.textPrimary,
+                                        unfocusedTextColor = tokens.colors.textPrimary,
+                                        focusedLabelColor = tokens.colors.accent,
+                                        unfocusedLabelColor = tokens.colors.textMuted,
+                                        focusedBorderColor = tokens.colors.accent,
+                                        unfocusedBorderColor = tokens.colors.borderDefault,
+                                        cursorColor = tokens.colors.accent,
+                                    ),
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Button(
@@ -243,6 +257,15 @@ internal fun PlayerWatchPartyPanel(
                                         label = { Text(stringResource(Res.string.watch_party_room_code)) },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = tokens.colors.textPrimary,
+                                            unfocusedTextColor = tokens.colors.textPrimary,
+                                            focusedLabelColor = tokens.colors.accent,
+                                            unfocusedLabelColor = tokens.colors.textMuted,
+                                            focusedBorderColor = tokens.colors.accent,
+                                            unfocusedBorderColor = tokens.colors.borderDefault,
+                                            cursorColor = tokens.colors.accent,
+                                        ),
                                     )
                                     Button(
                                         onClick = { onJoinRoom(codeInput) },
@@ -257,17 +280,20 @@ internal fun PlayerWatchPartyPanel(
                                     text = sessionState.roomCode.orEmpty(),
                                     style = MaterialTheme.typography.headlineMedium,
                                     fontWeight = FontWeight.Bold,
+                                    color = tokens.colors.textPrimary,
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
                                     text = stringResource(Res.string.watch_party_participants),
                                     style = MaterialTheme.typography.labelLarge,
+                                    color = tokens.colors.textMuted,
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 if (sessionState.participants.size <= 1) {
                                     Text(
                                         text = stringResource(Res.string.watch_party_alone_hint),
                                         style = MaterialTheme.typography.bodySmall,
+                                        color = tokens.colors.textMuted,
                                     )
                                 }
                                 LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
@@ -282,6 +308,8 @@ internal fun PlayerWatchPartyPanel(
                                         onDismiss()
                                     },
                                     modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
+                                    border = BorderStroke(1.dp, tokens.colors.borderDefault),
                                 ) {
                                     Text(stringResource(Res.string.watch_party_leave_room))
                                 }
@@ -296,6 +324,7 @@ internal fun PlayerWatchPartyPanel(
 
 @Composable
 private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
+    val tokens = MaterialTheme.nuvio
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -319,10 +348,12 @@ private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
             imageVector = icon,
             contentDescription = description,
             modifier = Modifier.size(18.dp),
+            tint = tokens.colors.textMuted,
         )
         Text(
             text = participant.displayName,
             style = MaterialTheme.typography.bodyMedium,
+            color = tokens.colors.textPrimary,
         )
     }
 }
@@ -384,6 +415,7 @@ private fun WatchPartyContentPromptOverlay(
                 Text(
                     text = stringResource(Res.string.watch_party_prompt_title, prompt.displayTitle),
                     style = MaterialTheme.typography.titleMedium,
+                    color = tokens.colors.textPrimary,
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -392,7 +424,11 @@ private fun WatchPartyContentPromptOverlay(
                             Text(stringResource(Res.string.watch_party_prompt_show_episodes))
                         }
                     }
-                    OutlinedButton(onClick = onDismiss) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
+                        border = BorderStroke(1.dp, tokens.colors.borderDefault),
+                    ) {
                         Text(stringResource(Res.string.watch_party_prompt_dismiss))
                     }
                 }
