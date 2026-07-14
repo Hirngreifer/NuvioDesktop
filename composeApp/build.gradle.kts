@@ -1061,6 +1061,25 @@ if (isLinuxHost) {
     tasks.matching { it.name in desktopNativePlayerTasks }.configureEach {
         dependsOn(buildLinuxPlayerBridge)
     }
+
+    // Standalone player measurement harness (LinuxPlayerPerfHarness.kt):
+    //   ./gradlew :composeApp:runLinuxPlayerPerfHarness -PharnessArgs="<file> --fullscreen"
+    // Working dir is the repo root so LinuxPlayerBridge finds the freshly
+    // built .so under composeApp/build/native/linux.
+    tasks.register<JavaExec>("runLinuxPlayerPerfHarness") {
+        group = "run"
+        description = "Plays one file/URL through the Linux player render path for perf measurements"
+        dependsOn(buildLinuxPlayerBridge, tasks.named("desktopMainClasses"))
+        mainClass.set("com.nuvio.app.features.player.desktop.LinuxPlayerPerfHarnessKt")
+        classpath = files(
+            kotlin.targets.getByName("desktop").compilations.getByName("main").output.allOutputs,
+            configurations.getByName("desktopRuntimeClasspath"),
+        )
+        workingDir = rootProject.projectDir
+        argumentProviders.add {
+            (providers.gradleProperty("harnessArgs").orNull ?: "").split(" ").filter(String::isNotBlank)
+        }
+    }
 }
 // -----------------------------------------------------------------------------
 
