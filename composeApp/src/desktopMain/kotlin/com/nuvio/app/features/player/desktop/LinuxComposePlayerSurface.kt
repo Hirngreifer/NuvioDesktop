@@ -81,6 +81,9 @@ internal fun LinuxComposePlayerSurface(
         val running = AtomicBoolean(true)
         val thread = Thread {
             var firstFrameLogged = false
+            // NUVIO_LINUX_PERF=1 prints a periodic frame-timing summary to
+            // stderr; the baseline/optimization work is measured against it.
+            val perf = if (System.getenv("NUVIO_LINUX_PERF") == "1") LinuxPlayerPerfAggregator() else null
             while (running.get()) {
                 // Stale players (re-attach, retry) are torn down here: the
                 // teardown makes the EGL context current, which must never
@@ -99,6 +102,23 @@ internal fun LinuxComposePlayerSurface(
                     if (!firstFrameLogged) {
                         firstFrameLogged = true
                         surfaceLog.d { "first video frame rendered (${frameStore.debugState()})" }
+                    }
+                    perf?.record(
+                        nowNanos = System.nanoTime(),
+                        renderNanos = frameStore.lastRenderNanos,
+                        copyNanos = frameStore.lastCopyNanos,
+                        width = frameStore.allocatedWidth,
+                        height = frameStore.allocatedHeight,
+                    )?.let { line ->
+                        System.err.println(
+                            "nuvio-linux-perf: $line" +
+                                " dropped=${LinuxPlayerBridge.frameDropCount(handle)}" +
+                                String.format(
+                                    java.util.Locale.ROOT,
+                                    " source_fps=%.1f",
+                                    LinuxPlayerBridge.estimatedVfFps(handle),
+                                ),
+                        )
                     }
                 } else {
                     Thread.sleep(2)
@@ -221,9 +241,12 @@ internal class LinuxFrameStore {
         val buf = buffer ?: return false
         val w = width
         val h = height
+        val renderStart = System.nanoTime()
         val rendered = LinuxPlayerBridge.render(handle, buf, w, h)
+        lastRenderNanos = System.nanoTime() - renderStart
         lastRenderResult = rendered
         if (rendered != 1) return false
+        val copyStart = System.nanoTime()
         buf.rewind()
         buf.get(bytes)
         val info = ImageInfo(w, h, ColorType.BGRA_8888, ColorAlphaType.OPAQUE)
@@ -233,8 +256,19 @@ internal class LinuxFrameStore {
             backBitmap = frontBitmap
             frontBitmap = back
         }
+        lastCopyNanos = System.nanoTime() - copyStart
         return true
     }
+
+    /** Frame-thread only: timings of the most recent renderInto() call. */
+    var lastRenderNanos: Long = 0
+        private set
+    var lastCopyNanos: Long = 0
+        private set
+
+    /** Frame-thread only: currently allocated buffer dimensions. */
+    val allocatedWidth: Int get() = width
+    val allocatedHeight: Int get() = height
 
     /** Called from the UI thread. */
     fun front(): Bitmap? = synchronized(lock) { frontBitmap?.takeIf { width > 0 } }

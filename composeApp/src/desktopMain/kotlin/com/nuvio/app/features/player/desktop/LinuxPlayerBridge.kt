@@ -94,4 +94,10 @@ internal object LinuxPlayerBridge {
 
     /** Returns and clears the last playback error message, if any. */
     external fun lastErrorMessage(handle: Long): String?
+
+    /** mpv's `frame-drop-count`: video frames dropped because display lagged. */
+    external fun frameDropCount(handle: Long): Long
+
+    /** mpv's `estimated-vf-fps`: measured source fps after filters, 0 if unknown. */
+    external fun estimatedVfFps(handle: Long): Double
 }

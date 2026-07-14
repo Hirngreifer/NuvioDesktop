@@ -819,6 +819,19 @@ BRIDGE_FN(void, applySubtitleStyle)(JNIEnv *env, jclass cls, jlong handle,
     api.set_property(p->mpv, "sub-pos", MPV_FORMAT_INT64, &pos);
 }
 
+BRIDGE_FN(jlong, frameDropCount)(JNIEnv *env, jclass cls, jlong handle) {
+    Player *p = player_from_handle(handle);
+    if (!p) return 0;
+    int64_t v = 0;
+    if (api.get_property(p->mpv, "frame-drop-count", MPV_FORMAT_INT64, &v) < 0) return 0;
+    return (jlong)v;
+}
+
+BRIDGE_FN(jdouble, estimatedVfFps)(JNIEnv *env, jclass cls, jlong handle) {
+    Player *p = player_from_handle(handle);
+    return p ? get_double(p, "estimated-vf-fps", 0.0) : 0.0;
+}
+
 BRIDGE_FN(jstring, lastErrorMessage)(JNIEnv *env, jclass cls, jlong handle) {
     Player *p = player_from_handle(handle);
     if (!p) return NULL;
