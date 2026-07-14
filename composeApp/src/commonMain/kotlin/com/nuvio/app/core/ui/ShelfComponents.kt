@@ -37,16 +37,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.style.TextAlign
@@ -85,10 +89,15 @@ fun <T> NuvioShelfSection(
     onViewAllClick: (() -> Unit)? = null,
     viewAllPillSize: NuvioViewAllPillSize = NuvioViewAllPillSize.Default,
     key: ((T) -> Any)? = null,
+    animatePlacement: Boolean = false,
     itemContent: @Composable (T) -> Unit,
 ) {
     val tokens = MaterialTheme.nuvio
     val rowState = rememberLazyListState()
+    val duplicateSafeEntries = remember(entries, key) {
+        key?.let { entries.withDuplicateSafeLazyKeys(it) }
+    }
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(tokens.spacing.controlGap + NuvioTokens.Space.s2),
@@ -108,16 +117,28 @@ fun <T> NuvioShelfSection(
             contentPadding = rowContentPadding,
             horizontalArrangement = Arrangement.spacedBy(itemSpacing),
         ) {
-            if (key != null) {
+            if (duplicateSafeEntries != null) {
                 items(
-                    items = entries.withDuplicateSafeLazyKeys(key),
+                    items = duplicateSafeEntries,
                     key = { entry -> entry.lazyKey },
+                    contentType = { "poster" },
                 ) { keyedEntry ->
-                    itemContent(keyedEntry.value)
+                    if (animatePlacement) {
+                        Box(modifier = Modifier.animateItem()) { itemContent(keyedEntry.value) }
+                    } else {
+                        itemContent(keyedEntry.value)
+                    }
                 }
             } else {
-                items(entries) { entry ->
-                    itemContent(entry)
+                items(
+                    items = entries,
+                    contentType = { "poster" },
+                ) { entry ->
+                    if (animatePlacement) {
+                        Box(modifier = Modifier.animateItem()) { itemContent(entry) }
+                    } else {
+                        itemContent(entry)
+                    }
                 }
             }
         }
@@ -234,7 +255,7 @@ fun NuvioPosterCard(
 
     Column(
         modifier = Modifier
-            .posterCardClickable(onClick = onClick, onLongClick = onLongClick)
+            .desktopPosterHoverScale()
             .then(modifier)
             .width(cardWidth),
         verticalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s6),
@@ -244,7 +265,18 @@ fun NuvioPosterCard(
                 .fillMaxWidth()
                 .aspectRatio(shape.aspectRatio)
                 .clip(cardShape)
-                .background(tokens.colors.surface),
+                .background(tokens.colors.surface)
+                .nuvioCardDepth(
+                    shape = cardShape,
+                    surface = NuvioCardDepthSurface.Posters,
+                )
+                .posterCardClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    zoomImageUrl = imageUrl,
+                    zoomCornerRadius = posterCardStyle.cornerRadiusDp.dp,
+                    hoverScaleEnabled = false,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (imageUrl != null) {
@@ -538,17 +570,48 @@ internal fun Modifier.desktopPosterHoverScale(
 internal fun Modifier.posterCardClickable(
     onClick: (() -> Unit)?,
     onLongClick: (() -> Unit)?,
-): Modifier =
-    if (onClick != null || onLongClick != null) {
-        val interactionSource = remember { MutableInteractionSource() }
-        desktopPosterHoverScale(interactionSource = interactionSource)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { onClick?.invoke() },
-                onLongClick = onLongClick,
-            )
-            .secondaryClick(onLongClick)
-    } else {
-        this
+    zoomImageUrl: String? = null,
+    zoomCornerRadius: Dp = NuvioTokens.Radius.poster,
+    hoverScaleEnabled: Boolean = true,
+): Modifier {
+    if (onClick == null && onLongClick == null) return this
+    val bounds = remember { mutableStateOf<Rect?>(null) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val handleLongClick = onLongClick?.let { longClick ->
+        {
+            bounds.value?.takeIf { zoomImageUrl != null }?.let { cardBounds ->
+                PosterZoomAnchorHolder.stash(
+                    PosterZoomAnchor(
+                        boundsInRoot = cardBounds,
+                        imageUrl = zoomImageUrl,
+                        cornerRadius = zoomCornerRadius,
+                    ),
+                )
+            }
+            longClick()
+        }
     }
+    return this
+        .onGloballyPositioned { coordinates -> bounds.value = coordinates.unclippedBoundsInRoot() }
+        .desktopPosterHoverScale(
+            enabled = hoverScaleEnabled,
+            interactionSource = interactionSource,
+        )
+        .combinedClickable(
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = { onClick?.invoke() },
+            onLongClick = handleLongClick,
+        )
+        .secondaryClick(handleLongClick)
+}
+
+private fun androidx.compose.ui.layout.LayoutCoordinates.unclippedBoundsInRoot(): Rect {
+    val position = positionInRoot()
+    return Rect(
+        left = position.x,
+        top = position.y,
+        right = position.x + size.width,
+        bottom = position.y + size.height,
+    )
+}

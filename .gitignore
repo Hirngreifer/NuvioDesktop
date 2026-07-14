@@ -29,3 +29,11 @@ scripts/scrape_android_compose_animation_docs.py
 tools
 AGENTS.md
 .superpowers/
+
+composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe
+
+PERFORMANCE_FINDINGS.md
+
+# Local MPVKit iOS build environment (sparse APFS image, see MPVKit docs)
+.mpvkit-build.sparseimage
+

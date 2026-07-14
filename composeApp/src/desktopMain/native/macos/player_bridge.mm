@@ -1412,7 +1412,6 @@ static void setMpvOptionString(mpv_handle *mpv, const char *name, const char *va
     setMpvOptionString(_mpv, "audio-channels", "auto");
     setMpvOptionString(_mpv, "hwdec", "auto");
     setMpvOptionString(_mpv, "gpu-hwdec-interop", "auto");
-    setMpvOptionString(_mpv, "hwdec-codecs", "all");
     if (decoderPriority == 0) {
         setMpvOptionString(_mpv, "vd-lavc-software-fallback", "no");
     } else if (decoderPriority == 2) {
@@ -1421,19 +1420,14 @@ static void setMpvOptionString(mpv_handle *mpv, const char *name, const char *va
     } else {
         setMpvOptionString(_mpv, "vd-lavc-software-fallback", "yes");
     }
-    setMpvOptionString(_mpv, "vd-lavc-threads", "4");
+    setMpvOptionString(_mpv, "vd-lavc-threads", "0");
     setMpvOptionString(_mpv, "target-colorspace-hint", "yes");
     setMpvOptionString(_mpv, "target-colorspace-hint-mode", "source");
     setMpvOptionString(_mpv, "target-colorspace-hint-strict", "no");
     setMpvOptionString(_mpv, "tone-mapping", "auto");
     setMpvOptionString(_mpv, "hdr-compute-peak", "no");
     setMpvOptionString(_mpv, "dither-depth", "auto");
-    setMpvOptionString(_mpv, "deband", "yes");
-    setMpvOptionString(_mpv, "scale", "spline36");
-    setMpvOptionString(_mpv, "cscale", "spline36");
-    setMpvOptionString(_mpv, "demuxer-max-bytes", "512MiB");
-    setMpvOptionString(_mpv, "demuxer-max-back-bytes", "256MiB");
-    setMpvOptionString(_mpv, "demuxer-seekable-cache", "yes");
+    setMpvOptionString(_mpv, "demuxer-max-bytes", "150MiB");
     setMpvOptionString(_mpv, "cache-secs", "120");
     setMpvOptionString(_mpv, "hr-seek", "no");
 
@@ -1936,11 +1930,10 @@ static void setMpvOptionString(mpv_handle *mpv, const char *name, const char *va
 
 - (BOOL)rawLoadingWithPaused:(BOOL)paused ended:(BOOL)eofReached duration:(double)duration {
     BOOL idle = [self flagProperty:"core-idle" fallback:YES];
-    BOOL seeking = [self flagProperty:"seeking" fallback:NO];
     BOOL bufferingCache = [self flagProperty:"paused-for-cache" fallback:NO];
     BOOL fileReady = duration > 0.0
         || [self int64Property:"track-list/count" fallback:0] > 0;
-    return !fileReady || (idle && !paused && !eofReached) || seeking || bufferingCache;
+    return !fileReady || (idle && !paused && !eofReached) || bufferingCache;
 }
 
 - (BOOL)isEnded {

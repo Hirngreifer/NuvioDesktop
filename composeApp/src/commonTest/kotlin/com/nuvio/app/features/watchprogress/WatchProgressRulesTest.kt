@@ -192,6 +192,76 @@ class WatchProgressRulesTest {
     }
 
     @Test
+    fun `Trakt playback does not replace watched history when watched timestamp is newer`() {
+        val watched = entry(
+            videoId = "show:1:4",
+            parentMetaId = "show",
+            seasonNumber = 1,
+            episodeNumber = 4,
+            lastUpdatedEpochMs = 3_000L,
+            isCompleted = true,
+            progressPercent = 100f,
+            source = WatchProgressSourceTraktHistory,
+        )
+        val playback = watched.copy(
+            lastUpdatedEpochMs = 1_000L,
+            isCompleted = false,
+            progressPercent = 25f,
+            source = WatchProgressSourceTraktPlayback,
+        )
+
+        assertFalse(shouldReplaceProgressSnapshotEntry(existing = watched, candidate = playback))
+        assertTrue(shouldReplaceProgressSnapshotEntry(existing = playback, candidate = watched))
+    }
+
+    @Test
+    fun `Trakt playback replaces watched history when playback timestamp is newer`() {
+        val watched = entry(
+            videoId = "show:1:4",
+            parentMetaId = "show",
+            seasonNumber = 1,
+            episodeNumber = 4,
+            lastUpdatedEpochMs = 1_000L,
+            isCompleted = true,
+            progressPercent = 100f,
+            source = WatchProgressSourceTraktHistory,
+        )
+        val playback = watched.copy(
+            lastUpdatedEpochMs = 3_000L,
+            isCompleted = false,
+            progressPercent = 25f,
+            source = WatchProgressSourceTraktPlayback,
+        )
+
+        assertTrue(shouldReplaceProgressSnapshotEntry(existing = watched, candidate = playback))
+        assertFalse(shouldReplaceProgressSnapshotEntry(existing = playback, candidate = watched))
+    }
+
+    @Test
+    fun `Trakt playback uses TV timestamp tolerance against watched history`() {
+        val watched = entry(
+            videoId = "show:1:4",
+            parentMetaId = "show",
+            seasonNumber = 1,
+            episodeNumber = 4,
+            lastUpdatedEpochMs = 2_000L,
+            isCompleted = true,
+            progressPercent = 100f,
+            source = WatchProgressSourceTraktHistory,
+        )
+        val insideTolerance = watched.copy(
+            lastUpdatedEpochMs = 1_001L,
+            isCompleted = false,
+            progressPercent = 25f,
+            source = WatchProgressSourceTraktPlayback,
+        )
+        val outsideTolerance = insideTolerance.copy(lastUpdatedEpochMs = 999L)
+
+        assertTrue(shouldReplaceProgressSnapshotEntry(existing = watched, candidate = insideTolerance))
+        assertFalse(shouldReplaceProgressSnapshotEntry(existing = watched, candidate = outsideTolerance))
+    }
+
+    @Test
     fun `completed progress does not cascade to watched history while Trakt progress is active`() {
         val completed = entry(
             videoId = "movie-complete",
@@ -244,6 +314,17 @@ class WatchProgressRulesTest {
         assertEquals("show:1:2", buildPlaybackVideoId(parentMetaId = "show", seasonNumber = 1, episodeNumber = 2, fallbackVideoId = "fallback"))
         assertEquals("fallback", buildPlaybackVideoId(parentMetaId = "movie", seasonNumber = null, episodeNumber = null, fallbackVideoId = "fallback"))
         assertEquals("movie", buildPlaybackVideoId(parentMetaId = "movie", seasonNumber = null, episodeNumber = null, fallbackVideoId = null))
+    }
+
+    @Test
+    fun `snapshot preserves local only progress before first successful push`() {
+        assertTrue(
+            WatchProgressRepository.shouldPreserveLocalWatchProgressEntry(
+                localEntry = entry(videoId = "local-only", lastUpdatedEpochMs = 1_000L),
+                lastSuccessfulPushEpochMs = 0L,
+                pullStartedEpochMs = 2_000L,
+            ),
+        )
     }
 
     @Test

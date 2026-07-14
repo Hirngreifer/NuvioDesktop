@@ -414,6 +414,18 @@ internal fun settingsSearchEntries(
         category = advancedCategory,
         icon = Icons.Rounded.Tune,
     )
+    if (SentrySettingsRepository.isSupported) {
+        addRow(
+            page = SettingsPage.Advanced,
+            key = "sentry-crash-reports",
+            title = stringResource(Res.string.settings_advanced_sentry_reports),
+            description = stringResource(Res.string.settings_advanced_sentry_reports_subtitle),
+            pageLabel = advancedPage,
+            section = stringResource(Res.string.settings_advanced_section_diagnostics),
+            category = advancedCategory,
+            icon = Icons.Rounded.Tune,
+        )
+    }
     addRow(
         page = SettingsPage.Advanced,
         key = "clear-cw-cache",
@@ -718,6 +730,23 @@ internal fun settingsSearchEntries(
             description = row.description,
             pageLabel = posterStylePage,
             section = posterSection,
+            icon = Icons.Rounded.Tune,
+        )
+    }
+
+    val cardDepthSection = stringResource(Res.string.settings_card_depth_title)
+    listOf(
+        PlaybackSearchRow("card-depth-effect", cardDepthSection, stringResource(Res.string.settings_card_depth_description)),
+        PlaybackSearchRow("card-depth-edge", stringResource(Res.string.settings_card_depth_edge)),
+        PlaybackSearchRow("card-depth-sheen", stringResource(Res.string.settings_card_depth_sheen)),
+    ).forEach { row ->
+        addRow(
+            page = SettingsPage.PosterCustomization,
+            key = "poster-${row.key}",
+            title = row.title,
+            description = row.description,
+            pageLabel = posterStylePage,
+            section = cardDepthSection,
             icon = Icons.Rounded.Tune,
         )
     }
