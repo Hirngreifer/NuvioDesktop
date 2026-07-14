@@ -43,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +83,8 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
         },
     )
 
+    val watchPartyRoomContent by WatchPartyCoordinator.roomContent.collectAsState()
+    val localContent = currentWatchPartyContentId()
     PlayerWatchPartyPanel(
         visible = showWatchPartyPanel,
         sessionState = watchPartySessionState,
@@ -90,6 +93,15 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
         onDisplayNameChange = { watchPartyDisplayName = it },
         onCreateRoom = { createWatchPartyRoom() },
         onJoinRoom = { code -> joinWatchPartyRoom(code) },
+        // Only offered while this player shows something other than the room
+        // content — the escape hatch back to the party without hunting for it.
+        joinPlaybackContent = watchPartyRoomContent?.takeUnless { room ->
+            localContent?.sameContentAs(room) == true
+        },
+        onJoinPlayback = {
+            showWatchPartyPanel = false
+            WatchPartyCoordinator.requestManualFollow()
+        },
         onLeave = { leaveWatchParty() },
         onDismiss = { showWatchPartyPanel = false },
     )
@@ -165,6 +177,9 @@ internal fun PlayerWatchPartyPanel(
     onLeave: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    // Room content to offer a direct playback join for; null hides the section.
+    joinPlaybackContent: WatchPartyContentId? = null,
+    onJoinPlayback: () -> Unit = {},
 ) {
     val tokens = MaterialTheme.nuvio
     var codeInput by remember { mutableStateOf("") }
@@ -283,6 +298,24 @@ internal fun PlayerWatchPartyPanel(
                                     color = tokens.colors.textPrimary,
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
+                                if (joinPlaybackContent != null) {
+                                    Text(
+                                        text = stringResource(
+                                            Res.string.watch_party_now_watching,
+                                            joinPlaybackContent.displayTitle,
+                                        ),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = tokens.colors.textMuted,
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Button(
+                                        onClick = onJoinPlayback,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(stringResource(Res.string.watch_party_open_playback))
+                                    }
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                }
                                 Text(
                                     text = stringResource(Res.string.watch_party_participants),
                                     style = MaterialTheme.typography.labelLarge,
