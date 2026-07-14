@@ -32,12 +32,14 @@ enum class WatchPartyFollowRoute { NONE, IN_PLAYER, VIA_LAUNCH }
 internal fun routeWatchPartyFollow(
     roomContent: WatchPartyContentId?,
     boundContent: WatchPartyContentId?,
+    playerDetached: Boolean = false,
 ): WatchPartyFollowRoute = when {
     roomContent == null -> WatchPartyFollowRoute.NONE
     boundContent != null && roomContent.sameContentAs(boundContent) -> WatchPartyFollowRoute.NONE
     boundContent != null &&
         boundContent.metaId == roomContent.metaId &&
         boundContent.mediaType == roomContent.mediaType -> WatchPartyFollowRoute.IN_PLAYER
+    boundContent == null && playerDetached -> WatchPartyFollowRoute.NONE
     else -> WatchPartyFollowRoute.VIA_LAUNCH
 }
 
@@ -68,6 +70,7 @@ object WatchPartyCoordinator {
 
     private val boundContent = MutableStateFlow<WatchPartyContentId?>(null)
     private var playerBound = false
+    private var playerDetached = false
     private var launchFollowActive = false
     private var collectJobs = mutableListOf<Job>()
 
@@ -98,6 +101,10 @@ object WatchPartyCoordinator {
         start: suspend (WatchPartySession, String) -> String,
     ) {
         if (_session.value != null || !isConfigured) return
+        // A player closed before any session existed leaves playerDetached = true
+        // (onPlayerUnbound flips it unconditionally). A fresh session must start
+        // undetached so the first room content auto-launches (fresh join → VIA_LAUNCH).
+        playerDetached = false
         val session = WatchPartySession(
             client = SupabaseWatchPartyClient(WatchPartySupabaseProvider.client, scope),
             scope = scope,
@@ -137,6 +144,7 @@ object WatchPartyCoordinator {
         _roomContent.value = null
         boundContent.value = null
         playerBound = false
+        playerDetached = false
         launchFollowActive = false
     }
 
@@ -148,7 +156,9 @@ object WatchPartyCoordinator {
     private fun routeFollow(content: WatchPartyContentId?) {
         val session = _session.value ?: return
         val bound = if (playerBound) boundContent.value else null
-        when (routeWatchPartyFollow(content, bound)) {
+        // playerDetached only meaningful when not bound; bound players are never "detached"
+        val detached = !playerBound && playerDetached
+        when (routeWatchPartyFollow(content, bound, detached)) {
             WatchPartyFollowRoute.NONE -> Unit
             WatchPartyFollowRoute.IN_PLAYER ->
                 _followInPlayer.tryEmit(buildFollowRequest(content!!, session))
@@ -170,18 +180,24 @@ object WatchPartyCoordinator {
         return WatchPartyFollowRequest(content, position)
     }
 
-    /** Banner click / manual re-entry: re-route the current room content. */
-    fun requestManualFollow() = routeFollow(_roomContent.value)
+    /** Banner click / manual re-entry: re-route the current room content.
+     *  Resets playerDetached so the banner click always triggers VIA_LAUNCH. */
+    fun requestManualFollow() {
+        playerDetached = false
+        routeFollow(_roomContent.value)
+    }
 
     fun onPlayerBoundContent(contentId: WatchPartyContentId?) {
         launchFollowActive = false
         playerBound = true
+        playerDetached = false
         boundContent.value = contentId
         _session.value?.setFollowing(true)
     }
 
     fun onPlayerUnbound() {
         playerBound = false
+        playerDetached = true
         boundContent.value = null
         // Clear content first so the engine transitions to SELECTING_SOURCE; then
         // setFollowing re-announces mappedStatus(SELECTING_SOURCE) = IDLE.

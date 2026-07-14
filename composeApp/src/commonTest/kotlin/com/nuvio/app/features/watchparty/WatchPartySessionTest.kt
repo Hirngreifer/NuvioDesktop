@@ -12,9 +12,13 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-// Second content id for multi-episode tests (EP1 lives in ContentChangeTest but is private there).
+// Content ids for lobby/multi-episode tests (EP1/EP2 live in ContentChangeTest but are private there).
+private val EP1 = WatchPartyContentId("tt1", "series", 1, 1, "Ep 1")
 private val EP2 = WatchPartyContentId("tt1", "series", 1, 2, "Ep 2")
 
 class WatchPartySessionTest {
@@ -375,6 +379,81 @@ class WatchPartySessionTest {
         session.setFollowing(false)
         assertEquals(WatchPartyParticipantStatus.IDLE, client.lastPresencePayload?.status,
             "after player closes: final presence must be IDLE, not PLAYING")
+    }
+
+    /**
+     * Spec Testing #2: Lobby-Join → erster Content → alle folgen → koordinierter Start.
+     * A member joins an empty room (lobby), starts the first content — the session must
+     * broadcast the coordinated-start hold (CONTENT_CHANGE, paused at 0:00). Once the
+     * other participant reports ready (PAUSED, carrying the hold) and the 5 s grace has
+     * elapsed, the session must broadcast AUTO_RESUME and play its own player.
+     */
+    @Test
+    fun lobbyJoinFirstContentCoordinatedStart() = runBlocking {
+        var now = 1_000_000L
+        val room = FakeWatchPartyRoom()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val client = room.client()
+        val session = WatchPartySession(
+            client = client,
+            scope = scope,
+            nowMs = { now },
+            actorId = "actor-a",
+            driftTickIntervalMs = 3_600_000L,
+        )
+        val commands = mutableListOf<WatchPartyPlayerCommand>()
+        scope.launch { session.commands.collect { commands += it } }
+
+        // Second lobby member as a raw fake client: captures every broadcast actor-a
+        // sends and lets us hand-craft its presence (pattern: driftLoop test).
+        val observer = room.client()
+        val broadcasts = mutableListOf<WatchPartyRoomState>()
+        scope.launch { observer.incomingStates.collect { broadcasts += it } }
+        observer.join(
+            "ABCD23",
+            WatchPartyPresencePayload("actor-b", "Ben", WatchPartyParticipantStatus.IDLE, null),
+        )
+
+        // --- Lobby join: room has no content, presence only.
+        session.join("ABCD23", "Anna")
+        assertNull(session.roomContent.value, "lobby join must not produce room content")
+        assertEquals(2, session.state.value.participants.size)
+
+        // --- First content started from the lobby → coordinated-start hold broadcast.
+        session.onContentChanged(EP1)
+        val hold = assertNotNull(
+            broadcasts.lastOrNull(),
+            "starting the first content must broadcast the room state",
+        )
+        assertEquals(WatchPartyStateReason.CONTENT_CHANGE, hold.reason)
+        assertFalse(hold.isPlaying, "coordinated start must begin paused")
+        assertEquals(0L, hold.positionMs, "coordinated start must begin at 0:00")
+        assertTrue(hold.contentId.sameContentAs(EP1))
+
+        // Local player becomes ready: paused at 0:00. Still inside the 5 s grace →
+        // no auto-resume yet, even though the other member is only IDLE (non-blocking).
+        session.onPlaybackSnapshot(testSnapshot(isPlaying = false, positionMs = 0L))
+        assertTrue(
+            broadcasts.none { it.reason == WatchPartyStateReason.AUTO_RESUME },
+            "must not auto-resume inside the grace window",
+        )
+
+        // --- Other participant followed and is ready (PAUSED, carrying the hold state);
+        // fake clock advanced past the 5 s grace.
+        now += 6_000L
+        client.deliverPresence(
+            listOf(
+                WatchPartyPresencePayload("actor-a", "Anna", WatchPartyParticipantStatus.PAUSED, hold),
+                WatchPartyPresencePayload("actor-b", "Ben", WatchPartyParticipantStatus.PAUSED, hold),
+            ),
+        )
+        val resume = broadcasts.last()
+        assertEquals(WatchPartyStateReason.AUTO_RESUME, resume.reason, "all ready past grace must auto-resume")
+        assertTrue(resume.isPlaying)
+        assertTrue(WatchPartyPlayerCommand.Play in commands, "auto-resume must play the local player")
+
+        session.leave()
+        scope.cancel()
     }
 
     @Test

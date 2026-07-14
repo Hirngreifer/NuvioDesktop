@@ -42,6 +42,17 @@ internal fun shouldShowWatchPartyPrompt(
     dismissed: WatchPartyContentId?,
 ): Boolean = dismissed == null || !incoming.sameContentAs(dismissed)
 
+/**
+ * Pure function — determines the new value of watchPartyDismissedPrompt when a
+ * ContentPrompt arrives.  If [incoming] differs from [dismissed], the suppression
+ * is cleared (spec: "suppression holds until the room content changes again").
+ * When [incoming] matches [dismissed], the suppression remains in place.
+ */
+internal fun nextDismissedPrompt(
+    incoming: WatchPartyContentId,
+    dismissed: WatchPartyContentId?,
+): WatchPartyContentId? = if (dismissed != null && !incoming.sameContentAs(dismissed)) null else dismissed
+
 internal fun PlayerScreenRuntime.currentWatchPartyContentId(): WatchPartyContentId? {
     if (parentMetaId.isBlank()) return null
     val season = activeSeasonNumber
@@ -133,6 +144,9 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
             watchPartyLog.i {
                 "Content prompt: room=${event.contentId} local=${currentWatchPartyContentId()}"
             }
+            // Room content changed away from the dismissed one → suppression ends
+            // (spec: dismiss holds only until the room content changes again).
+            watchPartyDismissedPrompt = nextDismissedPrompt(event.contentId, watchPartyDismissedPrompt)
             if (shouldShowWatchPartyPrompt(event.contentId, watchPartyDismissedPrompt)) {
                 watchPartyContentPrompt = event.contentId
             }
