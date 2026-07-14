@@ -33,7 +33,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -43,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
 import nuvio.composeapp.generated.resources.Res
@@ -73,9 +73,9 @@ fun WatchPartyScreen(
     modifier: Modifier = Modifier,
     onOpenPlayback: () -> Unit,
 ) {
-    val sessionState by WatchPartyCoordinator.sessionState.collectAsState()
-    val roomContent by WatchPartyCoordinator.roomContent.collectAsState()
-    val lastRoomCode by WatchPartyCoordinator.lastRoomCode.collectAsState()
+    val sessionState by WatchPartyCoordinator.sessionState.collectAsStateWithLifecycle()
+    val roomContent by WatchPartyCoordinator.roomContent.collectAsStateWithLifecycle()
+    val lastRoomCode by WatchPartyCoordinator.lastRoomCode.collectAsStateWithLifecycle()
     var codeInput by rememberSaveable { mutableStateOf("") }
     var nameInput by rememberSaveable { mutableStateOf("") }
 

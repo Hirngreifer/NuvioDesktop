@@ -37,6 +37,7 @@ import org.jetbrains.compose.resources.stringResource
 fun WatchPartyBannerHost(
     isPlayerVisible: Boolean,
     onOpenTab: () -> Unit,
+    onJoinPlayback: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sessionState by WatchPartyCoordinator.sessionState.collectAsStateWithLifecycle()
@@ -63,7 +64,7 @@ fun WatchPartyBannerHost(
         val onClick: () -> Unit = if (content == null) {
             onOpenTab
         } else {
-            { WatchPartyCoordinator.requestManualFollow() }
+            onJoinPlayback
         }
 
         WatchPartyBannerChip(

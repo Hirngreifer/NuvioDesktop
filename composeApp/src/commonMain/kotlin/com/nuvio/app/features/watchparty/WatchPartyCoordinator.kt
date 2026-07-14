@@ -117,10 +117,7 @@ object WatchPartyCoordinator {
         scope.launch {
             val resolvedName = displayName?.takeIf { it.isNotBlank() } ?: resolveDisplayName()
             runCatching { start(session, resolvedName) }
-                .onSuccess { code ->
-                    _lastRoomCode.value = code
-                    WatchPartyPreferencesStorage.saveLastRoomCode(code)
-                }
+                .onSuccess { code -> updateLastRoomCode(code) }
                 .onFailure { error ->
                     log.e(error) { "Failed to start watch party session" }
                     resetSession()
@@ -130,10 +127,19 @@ object WatchPartyCoordinator {
 
     fun leave() {
         val session = _session.value ?: return
-        _lastRoomCode.value = null
-        WatchPartyPreferencesStorage.clearLastRoomCode()
+        updateLastRoomCode(null)
         resetSession()
         scope.launch { session.leave() }
+    }
+
+    /** Sets the in-memory value and persists it (save for a code, clear for null). */
+    private fun updateLastRoomCode(code: String?) {
+        _lastRoomCode.value = code
+        if (code != null) {
+            WatchPartyPreferencesStorage.saveLastRoomCode(code)
+        } else {
+            WatchPartyPreferencesStorage.clearLastRoomCode()
+        }
     }
 
     private fun resetSession() {

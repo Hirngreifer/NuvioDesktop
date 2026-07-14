@@ -38,7 +38,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -3116,6 +3115,7 @@ private fun MainAppContent(
             WatchPartyBannerHost(
                 isPlayerVisible = currentBackStackEntry?.destination?.hasRoute<PlayerRoute>() == true,
                 onOpenTab = { handleRootTabClick(AppScreenTab.WatchParty) },
+                onJoinPlayback = { WatchPartyCoordinator.requestManualFollow() },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .zIndex(16f),
@@ -3424,7 +3424,7 @@ private fun DesktopHoverSidebar(
                     selected = selectedTab == AppScreenTab.WatchParty,
                     expanded = sidebarExpanded,
                     onClick = { selectTab(AppScreenTab.WatchParty) },
-                    showBadge = WatchPartyCoordinator.sessionState.collectAsState().value.isActive,
+                    showBadge = WatchPartyCoordinator.sessionState.collectAsStateWithLifecycle().value.isActive,
                 ) { color ->
                     Icon(
                         imageVector = Icons.Filled.Groups,
