@@ -1709,7 +1709,7 @@ private fun MainAppContent(
                     NuvioToastController.show(watchPartyFollowFailedText)
                     return@collect
                 }
-                if (navController.currentBackStackEntry?.destination?.hasRoute<PlayerRoute>() == true) {
+                if (navController.currentRoute is PlayerRoute) {
                     navController.popBackStack()
                 }
                 launchPlaybackWithDownloadPreference(
@@ -2346,21 +2346,15 @@ private fun MainAppContent(
                     val streamRouteScope = rememberCoroutineScope()
                     var resolvingDebridStream by rememberSaveable(route.launchId) { mutableStateOf(false) }
                     var pendingP2pStreamOpen by remember { mutableStateOf<PendingP2pStreamOpen?>(null) }
-                    // StreamLaunchStore cleanup lives in disposeRoute(); this observer only
-                    // detects a watch-party follow that was abandoned without starting playback.
+                    // StreamLaunchStore cleanup lives in disposeRoute(); this effect only
+                    // detects a watch-party follow that was abandoned without starting playback
+                    // (leaving composition without having navigated to the player).
                     val watchPartyFollowNavigatedToPlayer = remember { mutableStateOf(false) }
-                    val lifecycleOwner = backStackEntry
-                    DisposableEffect(lifecycleOwner, route.launchId) {
-                        val observer = LifecycleEventObserver { _, event ->
-                            if (event == Lifecycle.Event.ON_DESTROY) {
-                                if (launch.isWatchPartyFollow && !watchPartyFollowNavigatedToPlayer.value) {
-                                    WatchPartyCoordinator.markLaunchFollowFinished()
-                                }
-                            }
-                        }
-                        lifecycleOwner.lifecycle.addObserver(observer)
+                    DisposableEffect(route.launchId) {
                         onDispose {
-                            lifecycleOwner.lifecycle.removeObserver(observer)
+                            if (launch.isWatchPartyFollow && !watchPartyFollowNavigatedToPlayer.value) {
+                                WatchPartyCoordinator.markLaunchFollowFinished()
+                            }
                         }
                     }
                     val shouldResolveEpisodeVideoId =
@@ -3646,7 +3640,7 @@ private fun MainAppContent(
             )
 
             WatchPartyBannerHost(
-                isPlayerVisible = currentBackStackEntry?.destination?.hasRoute<PlayerRoute>() == true,
+                isPlayerVisible = navController.currentRoute is PlayerRoute,
                 onOpenTab = { handleRootTabClick(AppScreenTab.WatchParty) },
                 onJoinPlayback = { WatchPartyCoordinator.requestManualFollow() },
                 modifier = Modifier
