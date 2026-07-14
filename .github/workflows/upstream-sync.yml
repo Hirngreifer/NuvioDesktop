@@ -42,6 +42,15 @@ jobs:
           git remote add upstream "$UPSTREAM_REPO"
           git fetch upstream "$UPSTREAM_BRANCH"
           if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              # Manual runs always build the current main (e.g. after a local
+              # conflict resolution or to refresh dev-latest on demand).
+              echo "No new upstream commits — manual run builds current main."
+              echo "has_new=true" >> "$GITHUB_OUTPUT"
+              echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+              git push --force origin "HEAD:refs/heads/ci/upstream-merge"
+              exit 0
+            fi
             echo "No new upstream commits — nothing to do."
             echo "has_new=false" >> "$GITHUB_OUTPUT"
             exit 0
