@@ -12,14 +12,17 @@
 // from the same thread (the Kotlin frame loop); all other calls may come from
 // any thread.
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <jni.h>
 #include <locale.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static inline int64_t now_ns(void) {
     struct timespec ts;
@@ -77,6 +80,9 @@ enum {
     MPV_RENDER_PARAM_OPENGL_INIT_PARAMS = 2,
     MPV_RENDER_PARAM_OPENGL_FBO = 3,
     MPV_RENDER_PARAM_FLIP_Y = 4,
+    MPV_RENDER_PARAM_X11_DISPLAY = 8,
+    MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME = 12,
+    MPV_RENDER_PARAM_DRM_DISPLAY_V2 = 16,
     MPV_RENDER_PARAM_SW_SIZE = 17,
     MPV_RENDER_PARAM_SW_FORMAT = 18,
     MPV_RENDER_PARAM_SW_STRIDE = 19,
@@ -87,6 +93,14 @@ typedef struct mpv_opengl_init_params {
     void *(*get_proc_address)(void *ctx, const char *name);
     void *get_proc_address_ctx;
 } mpv_opengl_init_params;
+
+typedef struct mpv_opengl_drm_params_v2 {
+    int fd;
+    int crtc_id;
+    int connector_id;
+    void **atomic_request_ptr;
+    int render_fd;
+} mpv_opengl_drm_params_v2;
 
 typedef struct mpv_opengl_fbo {
     int fbo;
@@ -213,16 +227,41 @@ typedef int GLsizei;
 #define GL_LINEAR 0x2601
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#define GL_STREAM_READ 0x88E1
+#define GL_MAP_READ_BIT 0x0001
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_ALREADY_SIGNALED 0x911A
+#define GL_TIMEOUT_EXPIRED 0x911B
+#define GL_CONDITION_SATISFIED 0x911C
+typedef ptrdiff_t GLsizeiptr;
+typedef ptrdiff_t GLintptr;
+typedef unsigned GLbitfield;
+typedef void *GLsync;
+typedef uint64_t GLuint64;
 
 typedef struct {
     void *egl_lib;
     void *gl_lib;
+    mpv_opengl_drm_params_v2 drm_params; // render node for VAAPI interop;
+                                         // lifetime = render context
     EGLDisplay dpy;
     EGLContext ctx;
     EGLSurface surf;
     GLuint fbo;
     GLuint tex;
     int fbo_w, fbo_h;
+
+    // Double-buffered pixel-pack buffers: glReadPixels into a PBO is an
+    // asynchronous GPU-side detile/DMA, and mapping the *previous* frame's
+    // PBO one call later avoids the pipeline stall entirely (readback into
+    // client memory measured 50-230ms per frame on Iris Xe; see render()).
+    GLuint pbo[2];
+    int pbo_index;          // PBO the next readback goes into
+    int pbo_pending[2];     // 1 = holds a frame not yet delivered
+    GLsync pbo_fence[2];    // signaled when the pack transfer finished
+    int pbo_w, pbo_h;
+    GLenum last_wait_status; // debug: last glClientWaitSync result
 
     EGLDisplay (*GetDisplay)(void *);
     EGLBoolean (*Initialize)(EGLDisplay, EGLint *, EGLint *);
@@ -247,6 +286,16 @@ typedef struct {
     void (*PixelStorei)(GLenum, GLint);
     void (*DeleteFramebuffers)(GLsizei, const GLuint *);
     void (*DeleteTextures)(GLsizei, const GLuint *);
+    void (*GenBuffers)(GLsizei, GLuint *);
+    void (*BindBuffer)(GLenum, GLuint);
+    void (*BufferData)(GLenum, GLsizeiptr, const void *, GLenum);
+    void *(*MapBufferRange)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+    unsigned char (*UnmapBuffer)(GLenum);
+    void (*DeleteBuffers)(GLsizei, const GLuint *);
+    GLsync (*FenceSync)(GLenum, GLbitfield);
+    GLenum (*ClientWaitSync)(GLsync, GLbitfield, GLuint64);
+    void (*DeleteSync)(GLsync);
+    void (*Flush)(void);
 } GlBackend;
 
 enum {
@@ -276,7 +325,29 @@ typedef struct {
     int64_t perf_render_ns;
     int64_t perf_read_ns;
     int perf_frames;
+
+    // hwdec watchdog: on some driver stacks rendering imported hwdec
+    // surfaces stalls for hundreds of ms per frame (observed on Iris Xe /
+    // iHD / i915 where every interop flavor rendered at 150-800ms while the
+    // copy path rendered at 7-12ms). When we picked hwdec=auto ourselves,
+    // watch the first render times and downgrade to auto-copy once.
+    int hwdec_managed;      // we set hwdec=auto and may downgrade it
+    int hwdec_watch_frames; // rendered frames counted so far
+    int64_t hwdec_watch_ns; // their summed mpv render time
 } Player;
+
+// Watchdog tuning: skip the warm-up (shader compilation spikes), then judge
+// a window of frames — or earlier once enough render time has accumulated,
+// because pathological rendering delivers frames too slowly to ever fill the
+// window. 40ms/frame is far above any healthy interop render and far below
+// the observed pathological stalls.
+enum {
+    HWDEC_WATCH_SKIP = 5,
+    HWDEC_WATCH_WINDOW = 30,
+    HWDEC_WATCH_MIN_FRAMES = 5,
+};
+#define HWDEC_WATCH_AVG_LIMIT_NS 40000000LL
+#define HWDEC_WATCH_MAX_TOTAL_NS 2000000000LL
 
 static int mpv_render_context_create_checked(Player *p, mpv_render_param *params) {
     int r = api.render_context_create(&p->rctx, p->mpv, params);
@@ -358,6 +429,16 @@ static int gl_backend_init(Player *p) {
     GL_SYM(PixelStorei, "glPixelStorei");
     GL_SYM(DeleteFramebuffers, "glDeleteFramebuffers");
     GL_SYM(DeleteTextures, "glDeleteTextures");
+    GL_SYM(GenBuffers, "glGenBuffers");
+    GL_SYM(BindBuffer, "glBindBuffer");
+    GL_SYM(BufferData, "glBufferData");
+    GL_SYM(MapBufferRange, "glMapBufferRange");
+    GL_SYM(UnmapBuffer, "glUnmapBuffer");
+    GL_SYM(DeleteBuffers, "glDeleteBuffers");
+    GL_SYM(FenceSync, "glFenceSync");
+    GL_SYM(ClientWaitSync, "glClientWaitSync");
+    GL_SYM(DeleteSync, "glDeleteSync");
+    GL_SYM(Flush, "glFlush");
 #undef GL_SYM
 
     // Which device actually renders decides everything about performance
@@ -396,6 +477,63 @@ static int gl_ensure_fbo(GlBackend *gl, int w, int h) {
     return 1;
 }
 
+// (Re)allocates the two pack buffers for w*h RGBA frames. In-flight frames of
+// the old size are dropped — after a resize their content is stale anyway.
+static int gl_ensure_pbos(GlBackend *gl, int w, int h) {
+    if (gl->pbo[0] && gl->pbo_w == w && gl->pbo_h == h) return 1;
+    if (gl->pbo[0]) gl->DeleteBuffers(2, gl->pbo);
+    gl->GenBuffers(2, gl->pbo);
+    for (int i = 0; i < 2; i++) {
+        gl->BindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[i]);
+        gl->BufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)w * h * 4, NULL, GL_STREAM_READ);
+        gl->pbo_pending[i] = 0;
+        if (gl->pbo_fence[i]) {
+            gl->DeleteSync(gl->pbo_fence[i]);
+            gl->pbo_fence[i] = NULL;
+        }
+    }
+    gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gl->pbo_index = 0;
+    gl->pbo_w = w;
+    gl->pbo_h = h;
+    return 1;
+}
+
+// Returns 1 once the pack transfer into pbo[index] has completed. Never
+// blocks: mapping a still-in-flight PBO would stall behind the entire GPU
+// queue (decode traffic included), which is exactly what the PBO pipeline
+// exists to avoid.
+static int gl_pbo_ready(GlBackend *gl, int index) {
+    if (!gl->pbo_pending[index]) return 0;
+    if (!gl->pbo_fence[index]) return 1;
+    GLenum r = gl->ClientWaitSync(gl->pbo_fence[index], 0, 0);
+    gl->last_wait_status = r;
+    if (r == GL_ALREADY_SIGNALED || r == GL_CONDITION_SATISFIED) {
+        gl->DeleteSync(gl->pbo_fence[index]);
+        gl->pbo_fence[index] = NULL;
+        return 1;
+    }
+    return 0;
+}
+
+// Maps the given PBO and copies the finished frame into the caller's buffer.
+// Returns 1 on success.
+static int gl_deliver_pbo(GlBackend *gl, int index, void *pixels) {
+    gl->BindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[index]);
+    size_t bytes = (size_t)gl->pbo_w * gl->pbo_h * 4;
+    void *mapped = gl->MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, (GLsizeiptr)bytes, GL_MAP_READ_BIT);
+    if (!mapped) {
+        gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        gl->pbo_pending[index] = 0;
+        return 0;
+    }
+    memcpy(pixels, mapped, bytes);
+    gl->UnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gl->pbo_pending[index] = 0;
+    return 1;
+}
+
 // Creates the mpv render context on the calling (frame) thread. Tries the
 // OpenGL backend first, falls back to the software renderer.
 static void init_render_backend(Player *p) {
@@ -412,14 +550,45 @@ static void init_render_backend(Player *p) {
             .get_proc_address = gl_resolve,
             .get_proc_address_ctx = &p->gl,
         };
-        mpv_render_param params[] = {
-            {MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_OPENGL},
-            {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init},
-            {MPV_RENDER_PARAM_INVALID, NULL},
-        };
+        // The offscreen pbuffer context has no native display, so mpv's
+        // VAAPI interop cannot create a VA display on its own and hardware
+        // decoding degrades to the copy modes (measured 16.7fps for 4K60
+        // vaapi-copy vs 96fps native on Iris Xe). Hand mpv a DRM render
+        // node: display-server independent, and unlike an XWayland-routed
+        // X11 VA display it involves no cross-process buffer sync.
+        mpv_opengl_drm_params_v2 *drm = &p->gl.drm_params;
+        drm->fd = -1;
+        drm->crtc_id = 0;
+        drm->connector_id = 0;
+        drm->atomic_request_ptr = NULL;
+        drm->render_fd = -1;
+        char node[32];
+        for (int i = 128; i < 131 && drm->render_fd < 0; i++) {
+            snprintf(node, sizeof(node), "/dev/dri/renderD%d", i);
+            drm->render_fd = open(node, O_RDWR | O_CLOEXEC);
+        }
+
+        mpv_render_param params[4];
+        int n = 0;
+        params[n++] = (mpv_render_param){MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_OPENGL};
+        params[n++] = (mpv_render_param){MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init};
+        if (drm->render_fd >= 0) {
+            params[n++] = (mpv_render_param){MPV_RENDER_PARAM_DRM_DISPLAY_V2, drm};
+        }
+        params[n] = (mpv_render_param){MPV_RENDER_PARAM_INVALID, NULL};
         if (mpv_render_context_create_checked(p, params) == 0) {
             p->backend = BACKEND_GL;
-            fprintf(stderr, "nuvio-linux-bridge: using OpenGL rendering backend\n");
+            // With working interop the frames stay on the GPU end to end, so
+            // native hwdec is strictly better than the copy modes here. The
+            // property is set before the deferred loadfile runs; an explicit
+            // NUVIO_MPV_HWDEC keeps the last word.
+            const char *env_hwdec = getenv("NUVIO_MPV_HWDEC");
+            if (!(env_hwdec && env_hwdec[0])) {
+                api.set_property_string(p->mpv, "hwdec", "auto");
+                p->hwdec_managed = 1;
+            }
+            fprintf(stderr, "nuvio-linux-bridge: using OpenGL rendering backend%s\n",
+                    p->gl.drm_params.render_fd >= 0 ? " (DRM render node for hwdec interop)" : "");
             return;
         }
     }
@@ -515,13 +684,25 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
     } else {
         api.set_option_string(p->mpv, "terminal", "no");
     }
+    // Diagnostics: NUVIO_MPV_AO=null isolates video timing from the audio
+    // clock when chasing A-V sync problems.
+    const char *env_ao = getenv("NUVIO_MPV_AO");
+    if (env_ao && env_ao[0]) api.set_option_string(p->mpv, "ao", env_ao);
     // Network resilience for streaming sources
     api.set_option_string(p->mpv, "cache", "yes");
     api.set_option_string(p->mpv, "demuxer-max-bytes", "128MiB");
     api.set_option_string(p->mpv, "demuxer-max-back-bytes", "64MiB");
 
+    // NUVIO_MPV_HWDEC overrides the caller's hwdec choice — the escape hatch
+    // for setups where a specific decode path misbehaves (analogous to
+    // NUVIO_LINUX_RENDER=sw for the render backend).
+    const char *env_hwdec = getenv("NUVIO_MPV_HWDEC");
     const char *hwdec = (*env)->GetStringUTFChars(env, jhwdec, NULL);
-    api.set_option_string(p->mpv, "hwdec", hwdec && hwdec[0] ? hwdec : "auto-copy");
+    if (env_hwdec && env_hwdec[0]) {
+        api.set_option_string(p->mpv, "hwdec", env_hwdec);
+    } else {
+        api.set_option_string(p->mpv, "hwdec", hwdec && hwdec[0] ? hwdec : "auto-copy");
+    }
     (*env)->ReleaseStringUTFChars(env, jhwdec, hwdec);
 
     // HTTP headers arrive as "Key: Value" lines; mpv wants a comma-separated
@@ -596,10 +777,13 @@ BRIDGE_FN(void, dispose)(JNIEnv *env, jclass cls, jlong handle) {
     if (p->backend == BACKEND_GL && gl->ctx) {
         if (gl->fbo) gl->DeleteFramebuffers(1, &gl->fbo);
         if (gl->tex) gl->DeleteTextures(1, &gl->tex);
+        if (gl->pbo[0]) gl->DeleteBuffers(2, gl->pbo);
         gl->MakeCurrent(gl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, NULL);
         gl->DestroyContext(gl->dpy, gl->ctx);
         if (gl->surf) gl->DestroySurface(gl->dpy, gl->surf);
     }
+    // Closed after the render context (mpv's VA display references it).
+    if (gl->drm_params.render_fd >= 0) close(gl->drm_params.render_fd);
     if (p->mpv) api.terminate_destroy(p->mpv);
     free(p->pending_url);
     pthread_mutex_destroy(&p->state_mutex);
@@ -623,7 +807,8 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
     drain_events(p);
 
     uint64_t flags = api.render_context_update(p->rctx);
-    if (!(flags & MPV_RENDER_UPDATE_FRAME)) return 0;
+    int has_new_frame = (flags & MPV_RENDER_UPDATE_FRAME) != 0;
+    if (!has_new_frame && p->backend != BACKEND_GL) return 0;
 
     void *pixels = (*env)->GetDirectBufferAddress(env, jbuf);
     if (!pixels) return -1;
@@ -631,27 +816,86 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
     if (p->backend == BACKEND_GL) {
         GlBackend *gl = &p->gl;
         if (!gl->MakeCurrent(gl->dpy, gl->surf, gl->surf, gl->ctx)) return -1;
+
+        // Readback is pipelined through two PBOs: frame N is submitted as an
+        // asynchronous pack transfer and delivered on the next call, while
+        // frame N+1 renders. A blocking glReadPixels into client memory
+        // stalled 50-230ms per frame on Iris Xe; one frame of extra latency
+        // is invisible during video playback.
+        if (!has_new_frame) {
+            // No new frame (paused, EOF, or transfer still in flight): deliver
+            // a finished transfer so frames are never stuck one call behind.
+            int prev = gl->pbo_index ^ 1;
+            if (gl->pbo[0] && gl->pbo_w == w && gl->pbo_h == h && gl_pbo_ready(gl, prev)) {
+                return gl_deliver_pbo(gl, prev, pixels);
+            }
+            return 0;
+        }
+
         if (!gl_ensure_fbo(gl, w, h)) return -1;
+        if (!gl_ensure_pbos(gl, w, h)) return -1;
         mpv_opengl_fbo fbo = { .fbo = (int)gl->fbo, .w = w, .h = h, .internal_format = 0 };
         // glReadPixels returns rows bottom-up; mpv's default FBO orientation
         // already compensates for that, so no flip (verified with a
         // white-top/black-bottom test video against the software renderer).
         int flip_y = 0;
+        // Never let render() sleep until the frame's target display time
+        // (the default): our loop is update-callback-driven, not
+        // vsync-driven, and the wait shows up as multi-hundred-ms render
+        // stalls whenever mpv's frame scheduling is in flux.
+        int block = 0;
         mpv_render_param rparams[] = {
             {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
             {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+            {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
             {MPV_RENDER_PARAM_INVALID, NULL},
         };
-        int64_t t0 = p->perf_enabled ? now_ns() : 0;
+        int need_render_time = p->perf_enabled || p->hwdec_managed;
+        int64_t t0 = need_render_time ? now_ns() : 0;
         if (api.render_context_render(p->rctx, rparams) < 0) return -1;
-        int64_t t1 = p->perf_enabled ? now_ns() : 0;
+        int64_t t1 = need_render_time ? now_ns() : 0;
+
+        if (p->hwdec_managed) {
+            p->hwdec_watch_frames += 1;
+            if (p->hwdec_watch_frames > HWDEC_WATCH_SKIP) {
+                p->hwdec_watch_ns += t1 - t0;
+                int judged = p->hwdec_watch_frames - HWDEC_WATCH_SKIP;
+                if (judged >= HWDEC_WATCH_WINDOW ||
+                    (judged >= HWDEC_WATCH_MIN_FRAMES && p->hwdec_watch_ns >= HWDEC_WATCH_MAX_TOTAL_NS)) {
+                    p->hwdec_managed = 0; // judge exactly once
+                    if (p->hwdec_watch_ns / judged > HWDEC_WATCH_AVG_LIMIT_NS) {
+                        api.set_property_string(p->mpv, "hwdec", "auto-copy");
+                        fprintf(stderr,
+                                "nuvio-linux-bridge: hwdec interop renders at %.0fms/frame,"
+                                " downgrading to auto-copy\n",
+                                p->hwdec_watch_ns / 1e6 / judged);
+                    }
+                }
+            }
+        }
+
+        int cur = gl->pbo_index;
         gl->BindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
+        gl->BindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[cur]);
         gl->PixelStorei(GL_PACK_ALIGNMENT, 4);
-        // Read as GL_RGBA to match the GL_RGBA8 FBO: a format mismatch (BGRA)
-        // kicks Mesa off the blit fastpath into a per-pixel CPU conversion
-        // over uncached memory — measured 140-230ms per 720p frame on Iris Xe
-        // versus low single-digit ms for the matching format.
-        gl->ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        // GL_RGBA matches the GL_RGBA8 FBO; a format mismatch (BGRA) kicks
+        // Mesa off the blit fastpath into per-pixel CPU conversion.
+        gl->ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, (void *)0);
+        gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        // Overwriting a still-pending PBO (GPU too slow to keep up) silently
+        // drops that frame; the replaced fence goes with it.
+        if (gl->pbo_fence[cur]) gl->DeleteSync(gl->pbo_fence[cur]);
+        gl->pbo_fence[cur] = gl->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        // Without a flush the batch (and the fence) can sit unsubmitted in
+        // the command buffer indefinitely and ClientWaitSync(timeout=0)
+        // never reports completion.
+        gl->Flush();
+        gl->pbo_pending[cur] = 1;
+
+        int prev = cur ^ 1;
+        gl->pbo_index = prev;
+        int delivered = gl_pbo_ready(gl, prev) ? gl_deliver_pbo(gl, prev, pixels) : 0;
+
         if (p->perf_enabled) {
             int64_t t2 = now_ns();
             if (p->perf_window_start == 0) p->perf_window_start = t0;
@@ -660,17 +904,20 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
             p->perf_frames += 1;
             if (t2 - p->perf_window_start >= 2000000000LL) {
                 fprintf(stderr,
-                        "nuvio-linux-bridge-perf: mpv_render_avg=%.2fms readback_avg=%.2fms frames=%d\n",
+                        "nuvio-linux-bridge-perf: mpv_render_avg=%.2fms readback_avg=%.2fms frames=%d"
+                        " pending=%d/%d wait=0x%x delivered_last=%d\n",
                         p->perf_render_ns / 1e6 / p->perf_frames,
                         p->perf_read_ns / 1e6 / p->perf_frames,
-                        p->perf_frames);
+                        p->perf_frames,
+                        gl->pbo_pending[0], gl->pbo_pending[1],
+                        gl->last_wait_status, delivered);
                 p->perf_window_start = t2;
                 p->perf_render_ns = 0;
                 p->perf_read_ns = 0;
                 p->perf_frames = 0;
             }
         }
-        return 1;
+        return delivered;
     }
 
     int size[2] = {w, h};
