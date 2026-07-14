@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
@@ -133,6 +134,7 @@ fun HomeScreen(
     val homeUiState by HomeRepository.uiState.collectAsStateWithLifecycle()
     val homeSettingsUiState by HomeCatalogSettingsRepository.uiState.collectAsStateWithLifecycle()
     val homeListState = rememberLazyListState()
+    val continueWatchingListState = rememberLazyListState()
     val collections by CollectionRepository.collections.collectAsStateWithLifecycle()
     val continueWatchingPreferences by ContinueWatchingPreferencesRepository.uiState.collectAsStateWithLifecycle()
     val watchedUiState by WatchedRepository.uiState.collectAsStateWithLifecycle()
@@ -286,6 +288,13 @@ fun HomeScreen(
     val profileState by ProfileRepository.state.collectAsStateWithLifecycle()
     val activeProfileId = profileState.activeProfile?.profileIndex ?: 1
     val cwCacheGeneration by ContinueWatchingEnrichmentCache.generation.collectAsStateWithLifecycle()
+    var hasUserScrolledContinueWatching by remember(activeProfileId) { mutableStateOf(false) }
+
+    LaunchedEffect(activeProfileId, continueWatchingListState) {
+        snapshotFlow { continueWatchingListState.isScrollInProgress }.collect { isScrolling ->
+            if (isScrolling) hasUserScrolledContinueWatching = true
+        }
+    }
 
     var nextUpItemsBySeries by remember(activeProfileId, effectiveWatchProgressSource) {
         mutableStateOf<Map<String, Pair<Long, ContinueWatchingItem>>>(emptyMap())
@@ -432,6 +441,22 @@ fun HomeScreen(
             todayIsoDate = CurrentDateProvider.todayIsoDate(),
             cloudLibraryUiState = cloudLibraryUiState,
         )
+    }
+    LaunchedEffect(activeProfileId, continueWatchingItems.isNotEmpty(), hasUserScrolledContinueWatching) {
+        if (!hasUserScrolledContinueWatching && continueWatchingItems.isNotEmpty()) {
+            snapshotFlow {
+                continueWatchingListState.firstVisibleItemIndex to
+                    continueWatchingListState.firstVisibleItemScrollOffset
+            }.collect { (index, offset) ->
+                if (
+                    !hasUserScrolledContinueWatching &&
+                    !continueWatchingListState.isScrollInProgress &&
+                    (index != 0 || offset != 0)
+                ) {
+                    continueWatchingListState.scrollToItem(0)
+                }
+            }
+        }
     }
     val enabledAddons = remember(addonsUiState.addons) {
         addonsUiState.addons.enabledAddons()
@@ -858,6 +883,7 @@ fun HomeScreen(
                                 modifier = Modifier.padding(bottom = 12.dp),
                                 sectionPadding = homeSectionPadding,
                                 layout = continueWatchingLayout,
+                                listState = continueWatchingListState,
                                 onItemClick = onContinueWatchingClick,
                                 onItemLongPress = onContinueWatchingLongPress,
                             )
@@ -883,6 +909,7 @@ fun HomeScreen(
                                 modifier = Modifier.padding(bottom = 12.dp),
                                 sectionPadding = homeSectionPadding,
                                 layout = continueWatchingLayout,
+                                listState = continueWatchingListState,
                                 onItemClick = onContinueWatchingClick,
                                 onItemLongPress = onContinueWatchingLongPress,
                             )
@@ -931,6 +958,7 @@ fun HomeScreen(
                                 modifier = Modifier.padding(bottom = 12.dp),
                                 sectionPadding = homeSectionPadding,
                                 layout = continueWatchingLayout,
+                                listState = continueWatchingListState,
                                 onItemClick = onContinueWatchingClick,
                                 onItemLongPress = onContinueWatchingLongPress,
                             )
