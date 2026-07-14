@@ -24,11 +24,13 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -165,6 +167,7 @@ private fun WatchPartyJoinCreateSection(
                     text = stringResource(Res.string.watch_party_screen_title),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
+                    color = tokens.colors.textPrimary,
                 )
             }
             Spacer(modifier = Modifier.height(NuvioTokens.Space.s8))
@@ -193,6 +196,15 @@ private fun WatchPartyJoinCreateSection(
                 label = { Text(stringResource(Res.string.watch_party_your_name)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = tokens.colors.textPrimary,
+                    unfocusedTextColor = tokens.colors.textPrimary,
+                    focusedLabelColor = tokens.colors.accent,
+                    unfocusedLabelColor = tokens.colors.textMuted,
+                    focusedBorderColor = tokens.colors.accent,
+                    unfocusedBorderColor = tokens.colors.borderDefault,
+                    cursorColor = tokens.colors.accent,
+                ),
             )
         }
 
@@ -202,6 +214,8 @@ private fun WatchPartyJoinCreateSection(
                     onClick = { onJoin(lastRoomCode) },
                     enabled = isConfigured,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
+                    border = BorderStroke(1.dp, tokens.colors.borderDefault),
                 ) {
                     Text(text = stringResource(Res.string.watch_party_rejoin_last, lastRoomCode))
                 }
@@ -231,8 +245,17 @@ private fun WatchPartyJoinCreateSection(
                     value = codeInput,
                     onValueChange = onCodeInputChange,
                     label = { Text(stringResource(Res.string.watch_party_room_code)) },
-                    singleLine = true,
+                singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = tokens.colors.textPrimary,
+                        unfocusedTextColor = tokens.colors.textPrimary,
+                        focusedLabelColor = tokens.colors.accent,
+                        unfocusedLabelColor = tokens.colors.textMuted,
+                        focusedBorderColor = tokens.colors.accent,
+                        unfocusedBorderColor = tokens.colors.borderDefault,
+                        cursorColor = tokens.colors.accent,
+                    ),
                 )
                 Button(
                     onClick = { onJoin(normalizedInput) },
@@ -272,6 +295,7 @@ private fun WatchPartyLobbySection(
                     text = stringResource(Res.string.watch_party_panel_title),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
+                    color = tokens.colors.textPrimary,
                 )
                 if (sessionState.roomCode != null) {
                     Text(
@@ -334,6 +358,8 @@ private fun WatchPartyLobbySection(
             OutlinedButton(
                 onClick = onLeave,
                 modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
+                border = BorderStroke(1.dp, tokens.colors.borderDefault),
             ) {
                 Text(text = stringResource(Res.string.watch_party_leave_room))
             }
@@ -365,6 +391,7 @@ private fun WatchPartyActiveSection(
                     text = stringResource(Res.string.watch_party_panel_title),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
+                    color = tokens.colors.textPrimary,
                 )
                 if (sessionState.roomCode != null) {
                     Text(
@@ -400,6 +427,7 @@ private fun WatchPartyActiveSection(
                         text = stringResource(Res.string.watch_party_now_watching, content.displayTitle),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
+                        color = tokens.colors.textPrimary,
                     )
                     Button(
                         onClick = onOpenPlayback,
@@ -432,6 +460,8 @@ private fun WatchPartyActiveSection(
             OutlinedButton(
                 onClick = onLeave,
                 modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
+                border = BorderStroke(1.dp, tokens.colors.borderDefault),
             ) {
                 Text(text = stringResource(Res.string.watch_party_leave_room))
             }
@@ -445,6 +475,7 @@ private fun WatchPartyActiveSection(
 
 @Composable
 private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
+    val tokens = MaterialTheme.nuvio
     val (icon, description) = when (participant.status) {
         WatchPartyParticipantStatus.PLAYING ->
             Icons.Rounded.PlayArrow to stringResource(Res.string.watch_party_status_playing)
@@ -469,10 +500,12 @@ private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
             imageVector = icon,
             contentDescription = description,
             modifier = Modifier.size(18.dp),
+            tint = tokens.colors.textMuted,
         )
         Text(
             text = participant.displayName,
             style = MaterialTheme.typography.bodyMedium,
+            color = tokens.colors.textPrimary,
         )
     }
 }
