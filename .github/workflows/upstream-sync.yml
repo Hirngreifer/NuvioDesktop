@@ -1,0 +1,160 @@
+# Daily upstream sync + dev build for the fork.
+#
+# Merges NuvioMedia/NuvioDesktop@Dev into main, runs the desktop tests, packages
+# a Linux DEB and a Windows MSI, and ONLY when everything is green pushes the
+# merge to main and refreshes the rolling `dev-latest` pre-release. A red run
+# pushes nothing — GitHub's failure mail is the alert.
+name: Upstream sync and dev build
+
+on:
+  schedule:
+    - cron: "17 2 * * *" # ~04:17 Berlin (CEST)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/NuvioMedia/NuvioDesktop.git
+  UPSTREAM_BRANCH: Dev
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      has_new: ${{ steps.merge.outputs.has_new }}
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream into main
+        id: merge
+        run: |
+          git config user.name "nuvio-fork-bot"
+          git config user.email "actions@github.com"
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream "$UPSTREAM_BRANCH"
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "No new upstream commits — nothing to do."
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A conflict fails this job -> failure mail; nothing is pushed.
+          git merge --no-edit "upstream/$UPSTREAM_BRANCH"
+          echo "has_new=true" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Staging branch so both build jobs work on the exact same merge.
+          git push --force origin "HEAD:refs/heads/ci/upstream-merge"
+
+  test-and-deb:
+    needs: sync
+    if: needs.sync.outputs.has_new == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.merge_sha }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Desktop tests
+        run: ./gradlew :composeApp:desktopTest
+
+      - name: Package DEB
+        env:
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
+          NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+        run: ./gradlew :composeApp:packageReleaseDeb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-deb
+          path: composeApp/build/compose/binaries/main-release/deb/*.deb
+          if-no-files-found: error
+
+  msi:
+    needs: sync
+    if: needs.sync.outputs.has_new == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.merge_sha }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory "$env:RUNNER_TEMP\nuget" -NonInteractive
+          $dir = Get-ChildItem "$env:RUNNER_TEMP\nuget" -Directory |
+            Where-Object Name -like 'Microsoft.Web.WebView2*' |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $dir) { throw "WebView2 NuGet package not found" }
+          Add-Content $env:GITHUB_ENV "NUVIO_WEBVIEW2_DIR=$($dir.FullName)"
+
+      - name: Package MSI
+        shell: pwsh
+        env:
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
+          NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+        run: .\gradlew.bat :composeApp:packageReleaseMsi "-Pnuvio.webview2.dir=$env:NUVIO_WEBVIEW2_DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-msi
+          path: composeApp/build/compose/release-msis/*.msi
+          if-no-files-found: error
+
+  release:
+    needs: [sync, test-and-deb, msi]
+    if: needs.sync.outputs.has_new == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ needs.sync.outputs.merge_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.merge_sha }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Push green merge to main
+        run: |
+          git push origin "$MERGE_SHA:refs/heads/main"
+          git push origin --delete ci/upstream-merge || true
+
+      - name: Refresh dev-latest release
+        run: |
+          gh release delete dev-latest --yes || true
+          git push origin :refs/tags/dev-latest || true
+          gh release create dev-latest \
+            --prerelease \
+            --target "$MERGE_SHA" \
+            --title "Nuvio dev-latest ($(date -u +%Y-%m-%d))" \
+            --notes "Automatischer Build: Fork-main + Upstream-Dev vom $(date -u +%Y-%m-%d). Windows: MSI installieren. Linux: DEB installieren (sudo apt install ./nuvio_*.deb)." \
+            artifacts/*
