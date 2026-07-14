@@ -77,6 +77,11 @@ jobs:
           java-version: "21"
           cache: gradle
 
+      # generateRuntimeConfigs declares local.properties as a required input;
+      # the runtime values themselves come from the env vars below.
+      - name: Provide empty local.properties
+        run: touch local.properties
+
       - name: Desktop tests
         run: ./gradlew :composeApp:desktopTest
 
@@ -108,6 +113,10 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: gradle
+
+      - name: Provide empty local.properties
+        shell: pwsh
+        run: New-Item -ItemType File -Path local.properties -Force | Out-Null
 
       - name: Install WebView2 SDK
         shell: pwsh
