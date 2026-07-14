@@ -1,7 +1,6 @@
 package com.nuvio.app.features.player.desktop
 
 import java.io.File
-import java.nio.ByteBuffer
 import java.nio.file.Files
 
 /**
@@ -52,11 +51,13 @@ internal object LinuxPlayerBridge {
     external fun dispose(handle: Long)
 
     /**
-     * Renders the newest frame as RGBA into [buffer] (direct, capacity >= w*h*4).
+     * Renders the newest frame as RGBA (stride=width*4) into the native
+     * memory at [pixelsAddr] (capacity >= width*height*4) — in practice the
+     * pixel storage of a Skia bitmap, so frames land there without a copy.
      * Returns 1 if a new frame was written, 0 if nothing changed, -1 on error.
      * Must always be called from the same thread.
      */
-    external fun render(handle: Long, buffer: ByteBuffer, width: Int, height: Int): Int
+    external fun render(handle: Long, pixelsAddr: Long, width: Int, height: Int): Int
 
     external fun setPaused(handle: Long, paused: Boolean)
     external fun isPaused(handle: Long): Boolean
@@ -94,6 +95,10 @@ internal object LinuxPlayerBridge {
 
     /** Returns and clears the last playback error message, if any. */
     external fun lastErrorMessage(handle: Long): String?
+
+    /** Display width/height of the current video (mpv `dwidth`/`dheight`), 0 while unknown. */
+    external fun videoWidth(handle: Long): Int
+    external fun videoHeight(handle: Long): Int
 
     /** mpv's `frame-drop-count`: video frames dropped because display lagged. */
     external fun frameDropCount(handle: Long): Long

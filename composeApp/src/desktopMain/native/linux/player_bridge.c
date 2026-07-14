@@ -339,14 +339,15 @@ typedef struct {
 // Watchdog tuning: skip the warm-up (shader compilation spikes), then judge
 // a window of frames — or earlier once enough render time has accumulated,
 // because pathological rendering delivers frames too slowly to ever fill the
-// window. 40ms/frame is far above any healthy interop render and far below
-// the observed pathological stalls.
+// window. Healthy interop renders take single-digit ms even for 4K; the
+// broken stacks measured 35ms (1080p) to 800ms (4K) per frame, so 25ms
+// separates the two cleanly and stays below the 60fps frame budget.
 enum {
     HWDEC_WATCH_SKIP = 5,
     HWDEC_WATCH_WINDOW = 30,
     HWDEC_WATCH_MIN_FRAMES = 5,
 };
-#define HWDEC_WATCH_AVG_LIMIT_NS 40000000LL
+#define HWDEC_WATCH_AVG_LIMIT_NS 25000000LL
 #define HWDEC_WATCH_MAX_TOTAL_NS 2000000000LL
 
 static int mpv_render_context_create_checked(Player *p, mpv_render_param *params) {
@@ -790,10 +791,11 @@ BRIDGE_FN(void, dispose)(JNIEnv *env, jclass cls, jlong handle) {
     free(p);
 }
 
-// Renders the newest video frame into the direct buffer (RGBA, stride=w*4).
+// Renders the newest video frame into the caller's pixel memory (RGBA,
+// stride=w*4; on the Kotlin side this is the Skia bitmap's own storage).
 // Returns 1 if a new frame was written, 0 if nothing changed, -1 on error.
 // Must always be called from the same (frame) thread.
-BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jint w, jint h) {
+BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jlong pixelsAddr, jint w, jint h) {
     Player *p = player_from_handle(handle);
     if (!p) return -1;
     if (p->backend == BACKEND_PENDING) init_render_backend(p);
@@ -810,7 +812,7 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
     int has_new_frame = (flags & MPV_RENDER_UPDATE_FRAME) != 0;
     if (!has_new_frame && p->backend != BACKEND_GL) return 0;
 
-    void *pixels = (*env)->GetDirectBufferAddress(env, jbuf);
+    void *pixels = (void *)(intptr_t)pixelsAddr;
     if (!pixels) return -1;
 
     if (p->backend == BACKEND_GL) {
@@ -825,9 +827,12 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
         if (!has_new_frame) {
             // No new frame (paused, EOF, or transfer still in flight): deliver
             // a finished transfer so frames are never stuck one call behind.
-            int prev = gl->pbo_index ^ 1;
-            if (gl->pbo[0] && gl->pbo_w == w && gl->pbo_h == h && gl_pbo_ready(gl, prev)) {
-                return gl_deliver_pbo(gl, prev, pixels);
+            // The older submission is gl->pbo_index (the next submit target);
+            // deliver it before the newer one to keep frames in order.
+            if (gl->pbo[0] && gl->pbo_w == w && gl->pbo_h == h) {
+                int older = gl->pbo_index;
+                if (gl_pbo_ready(gl, older)) return gl_deliver_pbo(gl, older, pixels);
+                if (gl_pbo_ready(gl, older ^ 1)) return gl_deliver_pbo(gl, older ^ 1, pixels);
             }
             return 0;
         }
@@ -874,27 +879,36 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
             }
         }
 
+        // Deliver first, then read back into a *free* PBO. Submitting over a
+        // still-pending PBO would throw away frames the GPU is about to
+        // finish; under sustained GPU load that starved delivery completely
+        // (both PBOs perpetually pending, none ever signaled in time).
+        // gl->pbo_index is the older submission — deliver in order.
         int cur = gl->pbo_index;
-        gl->BindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
-        gl->BindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[cur]);
-        gl->PixelStorei(GL_PACK_ALIGNMENT, 4);
-        // GL_RGBA matches the GL_RGBA8 FBO; a format mismatch (BGRA) kicks
-        // Mesa off the blit fastpath into per-pixel CPU conversion.
-        gl->ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, (void *)0);
-        gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        // Overwriting a still-pending PBO (GPU too slow to keep up) silently
-        // drops that frame; the replaced fence goes with it.
-        if (gl->pbo_fence[cur]) gl->DeleteSync(gl->pbo_fence[cur]);
-        gl->pbo_fence[cur] = gl->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        // Without a flush the batch (and the fence) can sit unsubmitted in
-        // the command buffer indefinitely and ClientWaitSync(timeout=0)
-        // never reports completion.
-        gl->Flush();
-        gl->pbo_pending[cur] = 1;
-
         int prev = cur ^ 1;
-        gl->pbo_index = prev;
-        int delivered = gl_pbo_ready(gl, prev) ? gl_deliver_pbo(gl, prev, pixels) : 0;
+        int delivered = 0;
+        if (gl_pbo_ready(gl, cur)) delivered = gl_deliver_pbo(gl, cur, pixels);
+        else if (gl_pbo_ready(gl, prev)) delivered = gl_deliver_pbo(gl, prev, pixels);
+
+        int target = !gl->pbo_pending[cur] ? cur : (!gl->pbo_pending[prev] ? prev : -1);
+        if (target >= 0) {
+            gl->BindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
+            gl->BindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[target]);
+            gl->PixelStorei(GL_PACK_ALIGNMENT, 4);
+            // GL_RGBA matches the GL_RGBA8 FBO; a format mismatch (BGRA)
+            // kicks Mesa off the blit fastpath into per-pixel CPU conversion.
+            gl->ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, (void *)0);
+            gl->BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            gl->pbo_fence[target] = gl->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+            // Without a flush the batch (and the fence) can sit unsubmitted
+            // in the command buffer indefinitely and ClientWaitSync(0)
+            // never reports completion.
+            gl->Flush();
+            gl->pbo_pending[target] = 1;
+            gl->pbo_index = target ^ 1;
+        }
+        // If both PBOs are still in flight this frame is rendered but not
+        // read back — dropped for display, which is the honest option.
 
         if (p->perf_enabled) {
             int64_t t2 = now_ns();
@@ -1117,6 +1131,25 @@ BRIDGE_FN(void, applySubtitleStyle)(JNIEnv *env, jclass cls, jlong handle,
     api.set_property(p->mpv, "sub-font-size", MPV_FORMAT_DOUBLE, &size);
     int64_t pos = subPos;
     api.set_property(p->mpv, "sub-pos", MPV_FORMAT_INT64, &pos);
+}
+
+// Display dimensions of the current video (dwidth/dheight: storage size with
+// the container aspect applied — the right basis for sizing the render
+// target). 0 while no video is loaded.
+BRIDGE_FN(jint, videoWidth)(JNIEnv *env, jclass cls, jlong handle) {
+    Player *p = player_from_handle(handle);
+    if (!p) return 0;
+    int64_t v = 0;
+    if (api.get_property(p->mpv, "dwidth", MPV_FORMAT_INT64, &v) < 0) return 0;
+    return (jint)v;
+}
+
+BRIDGE_FN(jint, videoHeight)(JNIEnv *env, jclass cls, jlong handle) {
+    Player *p = player_from_handle(handle);
+    if (!p) return 0;
+    int64_t v = 0;
+    if (api.get_property(p->mpv, "dheight", MPV_FORMAT_INT64, &v) < 0) return 0;
+    return (jint)v;
 }
 
 BRIDGE_FN(jlong, frameDropCount)(JNIEnv *env, jclass cls, jlong handle) {

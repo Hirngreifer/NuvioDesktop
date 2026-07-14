@@ -32,7 +32,6 @@ import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Rect
-import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -92,7 +91,12 @@ internal fun LinuxComposePlayerSurface(
                 // serializes it against render() calls.
                 controller.drainDisposals()
                 val handle = controller.currentHandle
-                if (handle == 0L || !frameStore.ensureCapacity()) {
+                if (handle == 0L ||
+                    !frameStore.ensureCapacity(
+                        videoWidth = LinuxPlayerBridge.videoWidth(handle),
+                        videoHeight = LinuxPlayerBridge.videoHeight(handle),
+                    )
+                ) {
                     Thread.sleep(10)
                     continue
                 }
@@ -174,13 +178,12 @@ internal fun LinuxComposePlayerSurface(
     ) {
         @Suppress("UNUSED_EXPRESSION")
         frameTick // read state so every frame swap invalidates the canvas
-        val front = frameStore.front() ?: return@Canvas
+        val image = frameStore.snapshotFront() ?: return@Canvas
         drawIntoCanvas { canvas ->
-            val image = Image.makeFromBitmap(front)
             try {
                 canvas.nativeCanvas.drawImageRect(
                     image,
-                    Rect.makeWH(front.width.toFloat(), front.height.toFloat()),
+                    Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
                     Rect.makeWH(size.width, size.height),
                 )
             } finally {
@@ -193,10 +196,13 @@ internal fun LinuxComposePlayerSurface(
 private val surfaceLog = Logger.withTag("LinuxPlayerSurface")
 
 /**
- * Owns the native pixel buffer and two Skia bitmaps. The frame thread writes
- * into the back bitmap and swaps under the lock; the UI thread reads the front
- * bitmap under the same lock. Replaced bitmaps are left to the GC instead of
- * being closed eagerly because the UI may still be drawing them.
+ * Owns two Skia bitmaps whose pixel storage the native bridge renders into
+ * directly — no intermediate buffer, no per-frame copy on this side. The
+ * frame thread renders into the back bitmap and swaps indices under the
+ * lock; the UI thread snapshots the front bitmap under the same lock, so
+ * the bridge never writes into a bitmap that is being snapshotted.
+ * Replaced bitmaps are left to the GC instead of being closed eagerly
+ * because the UI may still be drawing an image snapshotted from them.
  */
 internal class LinuxFrameStore {
     private val lock = Any()
@@ -204,10 +210,10 @@ internal class LinuxFrameStore {
     private var requestedHeight = 0
     private var width = 0
     private var height = 0
-    private var buffer: ByteBuffer? = null
-    private var bytes: ByteArray = ByteArray(0)
-    private var frontBitmap: Bitmap? = null
-    private var backBitmap: Bitmap? = null
+    private val bitmaps = arrayOfNulls<Bitmap>(2)
+    private val pixelAddrs = LongArray(2)
+    private var backIndex = 0
+    private var hasFrame = false
 
     fun requestSize(w: Int, h: Int) {
         synchronized(lock) {
@@ -216,47 +222,55 @@ internal class LinuxFrameStore {
         }
     }
 
-    /** Called from the frame thread. Returns false while no usable size is known. */
-    fun ensureCapacity(): Boolean {
-        val (w, h) = synchronized(lock) { requestedWidth to requestedHeight }
+    /**
+     * Called from the frame thread. Returns false while no usable size is
+     * known. The buffers track the canvas size, capped so the video never
+     * renders above its native resolution (see [renderBufferSize]).
+     */
+    fun ensureCapacity(videoWidth: Int, videoHeight: Int): Boolean {
+        val (reqW, reqH) = synchronized(lock) { requestedWidth to requestedHeight }
+        val (w, h) = renderBufferSize(reqW, reqH, videoWidth, videoHeight)
         if (w <= 0 || h <= 0) return false
         if (w == width && h == height) return true
         val info = ImageInfo(w, h, ColorType.RGBA_8888, ColorAlphaType.OPAQUE)
-        val newFront = Bitmap().apply { allocPixels(info) }
-        val newBack = Bitmap().apply { allocPixels(info) }
-        val newBuffer = ByteBuffer.allocateDirect(w * h * 4)
+        val newBitmaps = Array(2) { Bitmap().apply { allocPixels(info) } }
+        val newAddrs = LongArray(2) { i ->
+            // The address points at the bitmap's own pixel storage and stays
+            // valid for the bitmap's lifetime; the Pixmap wrapper does not
+            // own it and can be closed right away.
+            newBitmaps[i].peekPixels()?.use { it.addr } ?: 0L
+        }
+        if (newAddrs.any { it == 0L }) return false
         synchronized(lock) {
             width = w
             height = h
-            buffer = newBuffer
-            bytes = ByteArray(w * h * 4)
-            frontBitmap = newFront
-            backBitmap = newBack
+            bitmaps[0] = newBitmaps[0]
+            bitmaps[1] = newBitmaps[1]
+            pixelAddrs[0] = newAddrs[0]
+            pixelAddrs[1] = newAddrs[1]
+            backIndex = 0
+            hasFrame = false
         }
         return true
     }
 
     /** Called from the frame thread. Returns true if a new frame was published. */
     fun renderInto(handle: Long): Boolean {
-        val buf = buffer ?: return false
         val w = width
         val h = height
+        val addr = pixelAddrs[backIndex]
+        if (addr == 0L) return false
         val renderStart = System.nanoTime()
-        val rendered = LinuxPlayerBridge.render(handle, buf, w, h)
+        val rendered = LinuxPlayerBridge.render(handle, addr, w, h)
         lastRenderNanos = System.nanoTime() - renderStart
         lastRenderResult = rendered
         if (rendered != 1) return false
-        val copyStart = System.nanoTime()
-        buf.rewind()
-        buf.get(bytes)
-        val info = ImageInfo(w, h, ColorType.RGBA_8888, ColorAlphaType.OPAQUE)
+        val publishStart = System.nanoTime()
         synchronized(lock) {
-            val back = backBitmap ?: return false
-            back.installPixels(info, bytes, w * 4)
-            backBitmap = frontBitmap
-            frontBitmap = back
+            backIndex = backIndex xor 1
+            hasFrame = true
         }
-        lastCopyNanos = System.nanoTime() - copyStart
+        lastCopyNanos = System.nanoTime() - publishStart
         return true
     }
 
@@ -270,8 +284,16 @@ internal class LinuxFrameStore {
     val allocatedWidth: Int get() = width
     val allocatedHeight: Int get() = height
 
-    /** Called from the UI thread. */
-    fun front(): Bitmap? = synchronized(lock) { frontBitmap?.takeIf { width > 0 } }
+    /**
+     * Called from the UI thread: immutable snapshot of the newest published
+     * frame, or null before the first one. Taken under the lock so the
+     * frame thread cannot be writing into the source bitmap concurrently.
+     * The caller closes the image.
+     */
+    fun snapshotFront(): Image? = synchronized(lock) {
+        if (!hasFrame) return null
+        bitmaps[backIndex xor 1]?.let { Image.makeFromBitmap(it) }
+    }
 
     fun debugState(): String = synchronized(lock) {
         "requested=${requestedWidth}x$requestedHeight allocated=${width}x$height lastRender=$lastRenderResult"
