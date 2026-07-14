@@ -221,7 +221,7 @@ internal class LinuxFrameStore {
         val (w, h) = synchronized(lock) { requestedWidth to requestedHeight }
         if (w <= 0 || h <= 0) return false
         if (w == width && h == height) return true
-        val info = ImageInfo(w, h, ColorType.BGRA_8888, ColorAlphaType.OPAQUE)
+        val info = ImageInfo(w, h, ColorType.RGBA_8888, ColorAlphaType.OPAQUE)
         val newFront = Bitmap().apply { allocPixels(info) }
         val newBack = Bitmap().apply { allocPixels(info) }
         val newBuffer = ByteBuffer.allocateDirect(w * h * 4)
@@ -249,7 +249,7 @@ internal class LinuxFrameStore {
         val copyStart = System.nanoTime()
         buf.rewind()
         buf.get(bytes)
-        val info = ImageInfo(w, h, ColorType.BGRA_8888, ColorAlphaType.OPAQUE)
+        val info = ImageInfo(w, h, ColorType.RGBA_8888, ColorAlphaType.OPAQUE)
         synchronized(lock) {
             val back = backBitmap ?: return false
             back.installPixels(info, bytes, w * 4)

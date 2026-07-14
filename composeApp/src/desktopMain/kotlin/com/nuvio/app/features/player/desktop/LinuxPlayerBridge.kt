@@ -9,7 +9,7 @@ import java.nio.file.Files
  *
  * Unlike [NativePlayerBridge] this is not bound to a native host window or a
  * WebView controls overlay: libmpv renders video frames through its software
- * render API into a caller-provided buffer via [render], and the shared
+ * render API into a caller-provided RGBA buffer via [render], and the shared
  * Compose player UI draws them (and its own controls) itself.
  */
 internal object LinuxPlayerBridge {
@@ -52,7 +52,7 @@ internal object LinuxPlayerBridge {
     external fun dispose(handle: Long)
 
     /**
-     * Renders the newest frame as BGRA into [buffer] (direct, capacity >= w*h*4).
+     * Renders the newest frame as RGBA into [buffer] (direct, capacity >= w*h*4).
      * Returns 1 if a new frame was written, 0 if nothing changed, -1 on error.
      * Must always be called from the same thread.
      */

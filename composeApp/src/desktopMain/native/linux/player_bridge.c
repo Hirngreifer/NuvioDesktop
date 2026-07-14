@@ -19,6 +19,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+static inline int64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
 
 // Minimal subset of the libmpv ABI (client.h / render.h) so we can build
 // without mpv headers installed. Values match the stable libmpv 2.x ABI.
@@ -261,6 +268,14 @@ typedef struct {
     int ended;          // END_FILE with reason EOF
     int file_loaded;    // FILE_LOADED seen
     char error_message[512];
+
+    // NUVIO_LINUX_PERF=1: split timing of the GL render path, printed every
+    // ~2s — separates mpv's own rendering from the glReadPixels readback.
+    int perf_enabled;
+    int64_t perf_window_start;
+    int64_t perf_render_ns;
+    int64_t perf_read_ns;
+    int perf_frames;
 } Player;
 
 static int mpv_render_context_create_checked(Player *p, mpv_render_param *params) {
@@ -344,6 +359,18 @@ static int gl_backend_init(Player *p) {
     GL_SYM(DeleteFramebuffers, "glDeleteFramebuffers");
     GL_SYM(DeleteTextures, "glDeleteTextures");
 #undef GL_SYM
+
+    // Which device actually renders decides everything about performance
+    // (Mesa silently hands out llvmpipe when the real driver is unusable),
+    // so always log it once.
+    const unsigned char *(*GetString)(GLenum) = gl_resolve(gl, "glGetString");
+    if (GetString) {
+        const unsigned char *vendor = GetString(0x1F00 /* GL_VENDOR */);
+        const unsigned char *renderer = GetString(0x1F01 /* GL_RENDERER */);
+        fprintf(stderr, "nuvio-linux-bridge: GL device: %s / %s\n",
+                vendor ? (const char *)vendor : "?",
+                renderer ? (const char *)renderer : "?");
+    }
     return 1;
 }
 
@@ -469,6 +496,8 @@ BRIDGE_FN(jlong, create)(JNIEnv *env, jclass cls, jstring jurl, jobjectArray jhe
 
     Player *p = calloc(1, sizeof(Player));
     pthread_mutex_init(&p->state_mutex, NULL);
+    const char *perf = getenv("NUVIO_LINUX_PERF");
+    p->perf_enabled = perf && strcmp(perf, "1") == 0;
     p->mpv = api.create();
     if (!p->mpv) {
         free(p);
@@ -577,7 +606,7 @@ BRIDGE_FN(void, dispose)(JNIEnv *env, jclass cls, jlong handle) {
     free(p);
 }
 
-// Renders the newest video frame into the direct buffer (BGRA, stride=w*4).
+// Renders the newest video frame into the direct buffer (RGBA, stride=w*4).
 // Returns 1 if a new frame was written, 0 if nothing changed, -1 on error.
 // Must always be called from the same (frame) thread.
 BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jint w, jint h) {
@@ -613,10 +642,34 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
             {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
             {MPV_RENDER_PARAM_INVALID, NULL},
         };
+        int64_t t0 = p->perf_enabled ? now_ns() : 0;
         if (api.render_context_render(p->rctx, rparams) < 0) return -1;
+        int64_t t1 = p->perf_enabled ? now_ns() : 0;
         gl->BindFramebuffer(GL_FRAMEBUFFER, gl->fbo);
         gl->PixelStorei(GL_PACK_ALIGNMENT, 4);
-        gl->ReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+        // Read as GL_RGBA to match the GL_RGBA8 FBO: a format mismatch (BGRA)
+        // kicks Mesa off the blit fastpath into a per-pixel CPU conversion
+        // over uncached memory — measured 140-230ms per 720p frame on Iris Xe
+        // versus low single-digit ms for the matching format.
+        gl->ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        if (p->perf_enabled) {
+            int64_t t2 = now_ns();
+            if (p->perf_window_start == 0) p->perf_window_start = t0;
+            p->perf_render_ns += t1 - t0;
+            p->perf_read_ns += t2 - t1;
+            p->perf_frames += 1;
+            if (t2 - p->perf_window_start >= 2000000000LL) {
+                fprintf(stderr,
+                        "nuvio-linux-bridge-perf: mpv_render_avg=%.2fms readback_avg=%.2fms frames=%d\n",
+                        p->perf_render_ns / 1e6 / p->perf_frames,
+                        p->perf_read_ns / 1e6 / p->perf_frames,
+                        p->perf_frames);
+                p->perf_window_start = t2;
+                p->perf_render_ns = 0;
+                p->perf_read_ns = 0;
+                p->perf_frames = 0;
+            }
+        }
         return 1;
     }
 
@@ -624,7 +677,7 @@ BRIDGE_FN(jint, render)(JNIEnv *env, jclass cls, jlong handle, jobject jbuf, jin
     size_t stride = (size_t)w * 4;
     mpv_render_param rparams[] = {
         {MPV_RENDER_PARAM_SW_SIZE, size},
-        {MPV_RENDER_PARAM_SW_FORMAT, "bgr0"}, // matches Skia BGRA_8888 + OPAQUE
+        {MPV_RENDER_PARAM_SW_FORMAT, "rgb0"}, // matches Skia RGBA_8888 + OPAQUE, same as the GL path
         {MPV_RENDER_PARAM_SW_STRIDE, &stride},
         {MPV_RENDER_PARAM_SW_POINTER, pixels},
         {MPV_RENDER_PARAM_INVALID, NULL},

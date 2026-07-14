@@ -25,7 +25,13 @@ fun main(args: Array<String>) {
         placement = if (fullscreen) WindowPlacement.Fullscreen else WindowPlacement.Floating,
         size = DpSize(1280.dp, 720.dp),
     )
-    singleWindowApplication(state = state, title = "Nuvio Linux Player Perf Harness") {
+    // resizable=false keeps tiling WMs (Hyprland) from re-tiling the window,
+    // so windowed measurements run at a reproducible surface size.
+    singleWindowApplication(
+        state = state,
+        title = "Nuvio Linux Player Perf Harness",
+        resizable = false,
+    ) {
         LinuxComposePlayerSurface(
             sourceUrl = url,
             sourceHeaders = emptyMap(),
