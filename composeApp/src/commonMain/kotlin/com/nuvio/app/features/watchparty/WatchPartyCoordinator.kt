@@ -32,7 +32,7 @@ enum class WatchPartyFollowRoute { NONE, IN_PLAYER, VIA_LAUNCH }
 internal fun routeWatchPartyFollow(
     roomContent: WatchPartyContentId?,
     boundContent: WatchPartyContentId?,
-    playerDetached: Boolean = false,
+    playerDetached: Boolean,
 ): WatchPartyFollowRoute = when {
     roomContent == null -> WatchPartyFollowRoute.NONE
     boundContent != null && roomContent.sameContentAs(boundContent) -> WatchPartyFollowRoute.NONE
@@ -203,7 +203,10 @@ object WatchPartyCoordinator {
 
     fun onPlayerUnbound() {
         playerBound = false
-        playerDetached = true
+        // An unbind during a running launch-follow is the old player disposing on the
+        // way to the new content — not the user leaving playback. Marking it detached
+        // would swallow follow routing for content changes in that window.
+        playerDetached = !launchFollowActive
         boundContent.value = null
         // Clear content first so the engine transitions to SELECTING_SOURCE; then
         // setFollowing re-announces mappedStatus(SELECTING_SOURCE) = IDLE.
