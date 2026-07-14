@@ -95,6 +95,11 @@ jobs:
           NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
           NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
           NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+          # Upstream's realtime endpoint (api.nuvio.tv/realtime/v1) is down —
+          # Kong answers 503 "name resolution failed" — so the app retry-spams
+          # every 7s. Periodic pull sync covers invalidation; re-enable once
+          # upstream's realtime service actually answers the websocket upgrade.
+          NUVIO_REALTIME_SYNC_ENABLED: "false"
         run: ./gradlew :composeApp:packageReleaseDeb
 
       - uses: actions/upload-artifact@v4
@@ -142,6 +147,8 @@ jobs:
           NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
           NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
           NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+          # See the DEB job: upstream realtime is down, disable invalidation push.
+          NUVIO_REALTIME_SYNC_ENABLED: "false"
         run: .\gradlew.bat :composeApp:packageReleaseMsi "-Pnuvio.webview2.dir=$env:NUVIO_WEBVIEW2_DIR"
 
       - uses: actions/upload-artifact@v4
