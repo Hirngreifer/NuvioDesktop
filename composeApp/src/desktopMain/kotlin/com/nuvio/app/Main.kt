@@ -34,6 +34,7 @@ private const val NuvioDesktopIconPath = "icons/nuvio-app-icon.png"
 private const val MacosDarkAquaAppearance = "NSAppearanceNameDarkAqua"
 
 fun main(args: Array<String>) {
+    com.nuvio.app.core.logging.DesktopFileLogging.install()
     configureDesktopChrome()
     installDesktopOpenUriHandler()
     handleDesktopLaunchArgs(args)
