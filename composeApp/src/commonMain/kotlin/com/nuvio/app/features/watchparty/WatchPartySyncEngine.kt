@@ -39,6 +39,10 @@ class WatchPartySyncEngine(
         private set
 
     private var localContent: WatchPartyContentId? = null
+    // Survives the null from a player unbind: a full title switch on desktop is
+    // "close player → start other film", so deliberate-change detection must
+    // compare against the content the user just left, not against null.
+    private var departedContent: WatchPartyContentId? = null
     private var lastSnapshot: WatchPartyPlaybackSnapshot? = null
     private var lastSnapshotAtMs: Long = 0L
     private var suppressUntilMs: Long = 0L
@@ -296,7 +300,13 @@ class WatchPartySyncEngine(
     fun onLocalContentChanged(contentId: WatchPartyContentId?, nowMs: Long): Output {
         val previous = localContent
         localContent = contentId
+        val departed = departedContent
+        if (previous != null) departedContent = previous
         val contentActuallyChanged = previous != null && (contentId == null || !previous.sameContentAs(contentId))
+        // "Close player → start other film": previous is null (the unbind cleared
+        // it) but the user demonstrably came from different content.
+        val switchedAcrossUnbind = previous == null && contentId != null &&
+            departed != null && !departed.sameContentAs(contentId)
         // Realign also for the very FIRST content when the room state arrived before
         // it (menu join: state via presence, then the follow-launch opens the player
         // with autoplay) — otherwise nothing pauses the player in a paused room.
@@ -315,6 +325,7 @@ class WatchPartySyncEngine(
         }
         val known = lastKnownState
         val deliberate = contentActuallyChanged ||
+            switchedAcrossUnbind ||
             // Lobby start: the first content while already presence-synced in a
             // state-less room. (Room creation from the player sets content BEFORE
             // the first presence sync — session starts collectors before join.)

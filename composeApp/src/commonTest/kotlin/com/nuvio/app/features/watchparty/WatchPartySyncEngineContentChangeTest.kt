@@ -120,4 +120,58 @@ class WatchPartySyncEngineContentChangeTest {
         val out = engine.onLocalContentChanged(null, nowMs = 2_000L)
         assertEquals(WatchPartyParticipantStatus.IDLE, out.presenceStatus)
     }
+
+    // ── Wechsel über Player-Schließen (unbind → bind) ────────────────────────
+    // Auf Desktop läuft ein kompletter Titelwechsel immer über "Player zu →
+    // neuen Film starten"; dazwischen nullt onPlayerUnbound den Content.
+
+    private val MOVIE_B = WatchPartyContentId("tt2", "movie", null, null, "Film B")
+
+    @Test
+    fun switchViaPlayerCloseBroadcastsContentChangeHold() {
+        val engine = WatchPartySyncEngine("me")
+        engine.onLocalContentChanged(EP1, nowMs = 1_000L)
+        engine.onRemoteState(roomState(content = EP1, isPlaying = true, positionMs = 10_000L, actorId = "other", seq = 5), nowMs = 1_000L)
+        engine.onSnapshot(WatchPartyPlaybackSnapshot(isPlaying = true, positionMs = 10_000L, isBuffering = false), nowMs = 2_000L)
+
+        // Player zu (unbind) …
+        engine.onLocalContentChanged(null, nowMs = 3_000L)
+        // … und ein anderer Film startet: bewusster Wechsel → Raum zieht mit.
+        val out = engine.onLocalContentChanged(MOVIE_B, nowMs = 4_000L)
+
+        val broadcast = assertNotNull(out.broadcast)
+        assertEquals(WatchPartyStateReason.CONTENT_CHANGE, broadcast.reason)
+        assertEquals(MOVIE_B, broadcast.contentId)
+        assertFalse(broadcast.isPlaying)
+        assertEquals(0L, broadcast.positionMs)
+    }
+
+    @Test
+    fun reopeningSameContentAfterPlayerCloseDoesNotBroadcastHold() {
+        val engine = WatchPartySyncEngine("me")
+        engine.onLocalContentChanged(EP1, nowMs = 1_000L)
+        engine.onRemoteState(roomState(content = EP1, isPlaying = false, positionMs = 30_000L, actorId = "other", seq = 5), nowMs = 1_000L)
+
+        engine.onLocalContentChanged(null, nowMs = 2_000L)
+        val out = engine.onLocalContentChanged(EP1, nowMs = 3_000L)
+
+        assertNull(out.broadcast)
+    }
+
+    @Test
+    fun followerLaunchAcrossPlayerCloseDoesNotBroadcast() {
+        val engine = WatchPartySyncEngine("me")
+        engine.onLocalContentChanged(EP1, nowMs = 1_000L)
+        // Der Raum wechselt auf einen anderen Film …
+        engine.onRemoteState(
+            roomState(content = MOVIE_B, isPlaying = false, positionMs = 0L, actorId = "other", seq = 7, reason = WatchPartyStateReason.CONTENT_CHANGE),
+            nowMs = 2_000L,
+        )
+        // … der Follow-Launch schließt den alten Player und bindet den Raum-Content:
+        engine.onLocalContentChanged(null, nowMs = 3_000L)
+        val out = engine.onLocalContentChanged(MOVIE_B, nowMs = 4_000L)
+
+        // Kein Re-Broadcast — der Raum ist ja schon dort.
+        assertNull(out.broadcast)
+    }
 }
