@@ -34,11 +34,44 @@ data class WatchPartyRoomState(
     val actorId: String,
     val seq: Long,
     val reason: WatchPartyStateReason,
+    val clock: Map<String, Long> = emptyMap(),
 ) {
-    fun isNewerThan(other: WatchPartyRoomState?): Boolean {
+    val isManualAction: Boolean
+        get() = reason == WatchPartyStateReason.USER || reason == WatchPartyStateReason.CONTENT_CHANGE
+
+    private enum class CausalRelation { DOMINATES, DOMINATED_OR_EQUAL, CONCURRENT }
+
+    private fun causalRelationTo(other: WatchPartyRoomState): CausalRelation {
+        var greater = false
+        var less = false
+        for (actor in clock.keys + other.clock.keys) {
+            val mine = clock[actor] ?: 0L
+            val theirs = other.clock[actor] ?: 0L
+            if (mine > theirs) greater = true
+            if (mine < theirs) less = true
+        }
+        return when {
+            greater && !less -> CausalRelation.DOMINATES
+            !greater -> CausalRelation.DOMINATED_OR_EQUAL
+            else -> CausalRelation.CONCURRENT
+        }
+    }
+
+    fun supersedes(other: WatchPartyRoomState?): Boolean {
         if (other == null) return true
-        if (seq != other.seq) return seq > other.seq
-        return actorId > other.actorId
+        if (clock.isEmpty() || other.clock.isEmpty()) {
+            if (seq != other.seq) return seq > other.seq
+            return actorId > other.actorId
+        }
+        return when (causalRelationTo(other)) {
+            CausalRelation.DOMINATES -> true
+            CausalRelation.DOMINATED_OR_EQUAL -> false
+            CausalRelation.CONCURRENT -> when {
+                isManualAction != other.isManualAction -> isManualAction
+                atWallClockMs != other.atWallClockMs -> atWallClockMs > other.atWallClockMs
+                else -> actorId > other.actorId
+            }
+        }
     }
 
     fun expectedPositionMs(nowMs: Long): Long =

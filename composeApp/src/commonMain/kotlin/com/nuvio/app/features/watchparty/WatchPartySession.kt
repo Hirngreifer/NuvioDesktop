@@ -76,6 +76,7 @@ class WatchPartySession(
     private var lastPresenceSentAtMs: Long = Long.MIN_VALUE / 2
     private var pendingPresence: WatchPartyPresencePayload? = null
     private var presenceFlushJob: Job? = null
+    private var bufferProbeJob: Job? = null
 
     // Following flag: when true SELECTING_SOURCE passes through; when false it maps to IDLE.
     private var isFollowing = false
@@ -126,6 +127,8 @@ class WatchPartySession(
         collectJobs.clear()
         presenceFlushJob?.cancel()
         presenceFlushJob = null
+        bufferProbeJob?.cancel()
+        bufferProbeJob = null
         pendingPresence = null
         isFollowing = false
         lastEngineStatus = null
@@ -152,7 +155,22 @@ class WatchPartySession(
     }
 
     fun onPlaybackSnapshot(snapshot: WatchPartyPlaybackSnapshot) {
-        scope.launch { dispatch(engine.onSnapshot(snapshot, nowMs())) }
+        scope.launch {
+            dispatch(engine.onSnapshot(snapshot, nowMs()))
+            if (snapshot.isBuffering) {
+                if (bufferProbeJob?.isActive != true) {
+                    bufferProbeJob = scope.launch {
+                        while (true) {
+                            delay(engineConfig.bufferDebounceMs + 50L)
+                            dispatch(engine.onBufferProbe(nowMs()))
+                        }
+                    }
+                }
+            } else {
+                bufferProbeJob?.cancel()
+                bufferProbeJob = null
+            }
+        }
     }
 
     fun onContentChanged(contentId: WatchPartyContentId?) {

@@ -9,6 +9,7 @@ data class WatchPartySyncConfig(
     val suppressWindowMs: Long = 500L,
     val contentStartGraceMs: Long = 5_000L,
     val contentStartTimeoutMs: Long = 60_000L,
+    val seekSettleTimeoutMs: Long = 15_000L,
 )
 
 sealed interface WatchPartyPlayerCommand {
@@ -48,20 +49,31 @@ class WatchPartySyncEngine(
     private var suppressUntilMs: Long = 0L
     private var pendingPlayState: Boolean? = null
     private var pendingSeekTargetMs: Long? = null
+    private var pendingSeekIssuedAtMs: Long = 0L
     private var bufferingSinceMs: Long? = null
+    private val observedClock = mutableMapOf<String, Long>()
+    private var maxObservedSeq = 0L
     private var hasReceivedPresence: Boolean = false
     private var lastPresenceStatus: WatchPartyParticipantStatus? = null
     private var realignOnNextSnapshot: Boolean = false
     private var participantStatuses: Map<String, WatchPartyParticipantStatus> = emptyMap()
 
+    private fun observe(state: WatchPartyRoomState) {
+        state.clock.forEach { (actor, counter) ->
+            observedClock[actor] = maxOf(observedClock[actor] ?: 0L, counter)
+        }
+        if (state.seq > maxObservedSeq) maxObservedSeq = state.seq
+    }
+
     fun onRemoteState(state: WatchPartyRoomState, nowMs: Long): Output {
+        observe(state)
         if (state.actorId == actorId) {
             // Echo of our own broadcast (double safety on top of receiveOwnBroadcasts = false):
             // adopt the seq if newer, never act on it.
-            if (state.isNewerThan(lastKnownState)) lastKnownState = state
+            if (state.supersedes(lastKnownState)) lastKnownState = state
             return Output()
         }
-        if (!state.isNewerThan(lastKnownState)) return Output()
+        if (!state.supersedes(lastKnownState)) return Output()
         lastKnownState = state
         return applyKnownState(nowMs)
     }
@@ -91,6 +103,7 @@ class WatchPartySyncEngine(
         if (abs(snapshot.positionMs - expectedMs) > config.driftToleranceMs) {
             commands += WatchPartyPlayerCommand.SeekTo(expectedMs)
             pendingSeekTargetMs = expectedMs
+            pendingSeekIssuedAtMs = nowMs
         }
         if (commands.isNotEmpty()) {
             suppressUntilMs = nowMs + config.suppressWindowMs
@@ -115,17 +128,30 @@ class WatchPartySyncEngine(
         nowMs: Long,
         reason: WatchPartyStateReason,
     ): WatchPartyRoomState {
+        val nextClock = observedClock.toMutableMap()
+        nextClock[actorId] = (nextClock[actorId] ?: 0L) + 1L
         val next = WatchPartyRoomState(
             contentId = requireNotNull(localContent) { "cannot broadcast without local content" },
             isPlaying = isPlaying,
             positionMs = positionMs,
             atWallClockMs = nowMs,
             actorId = actorId,
-            seq = (lastKnownState?.seq ?: 0L) + 1L,
+            seq = maxOf(maxObservedSeq, lastKnownState?.seq ?: 0L) + 1L,
             reason = reason,
+            clock = nextClock,
         )
+        observe(next)
         lastKnownState = next
         return next
+    }
+
+    private fun seekInFlight(nowMs: Long): Boolean {
+        if (pendingSeekTargetMs == null) return false
+        if (nowMs - pendingSeekIssuedAtMs >= config.seekSettleTimeoutMs) {
+            pendingSeekTargetMs = null
+            return false
+        }
+        return true
     }
 
     fun onSnapshot(snapshot: WatchPartyPlaybackSnapshot, nowMs: Long): Output {
@@ -133,6 +159,12 @@ class WatchPartySyncEngine(
         val known = lastKnownState
         val content = localContent
         val contentMatches = known != null && content != null && known.contentId.sameContentAs(content)
+
+        val arrivedAtSeekTarget = pendingSeekTargetMs?.let { target ->
+            abs(snapshot.positionMs - target) <= config.seekDetectionThresholdMs
+        } == true
+        if (arrivedAtSeekTarget) pendingSeekTargetMs = null
+        val inFlightSeek = !arrivedAtSeekTarget && seekInFlight(nowMs)
 
         var broadcast: WatchPartyRoomState? = null
         val commands = mutableListOf<WatchPartyPlayerCommand>()
@@ -144,6 +176,9 @@ class WatchPartySyncEngine(
             return applyKnownState(nowMs)
         }
 
+        val wasBuffering = previous?.isBuffering == true
+        if (!snapshot.isBuffering) bufferingSinceMs = null
+
         if (known == null && hasReceivedPresence && content != null) {
             // Empty room after join: we define the initial room state.
             broadcast = buildBroadcast(
@@ -152,7 +187,7 @@ class WatchPartySyncEngine(
                 nowMs = nowMs,
                 reason = WatchPartyStateReason.USER,
             )
-        } else if (contentMatches) {
+        } else if (contentMatches && !inFlightSeek) {
             if (snapshot.isBuffering) {
                 if (bufferingSinceMs == null) bufferingSinceMs = nowMs
                 val bufferedLongEnough = nowMs - (bufferingSinceMs ?: nowMs) >= config.bufferDebounceMs
@@ -165,8 +200,6 @@ class WatchPartySyncEngine(
                     )
                 }
             } else {
-                val wasBuffering = previous?.isBuffering == true
-                bufferingSinceMs = null
                 if (
                     wasBuffering &&
                     known!!.reason == WatchPartyStateReason.BUFFER_HOLD &&
@@ -197,11 +230,8 @@ class WatchPartySyncEngine(
 
                 val expectedLocalMs = expectedLocalPositionMs(previous, nowMs)
                 if (abs(snapshot.positionMs - expectedLocalMs) > config.seekDetectionThresholdMs) {
-                    val pendingTarget = pendingSeekTargetMs
                     when {
-                        pendingTarget != null &&
-                            abs(snapshot.positionMs - pendingTarget) <= config.seekDetectionThresholdMs ->
-                            pendingSeekTargetMs = null
+                        arrivedAtSeekTarget -> Unit
                         nowMs < suppressUntilMs -> Unit
                         else -> userAction = true
                     }
@@ -221,6 +251,17 @@ class WatchPartySyncEngine(
         lastSnapshot = snapshot
         lastSnapshotAtMs = nowMs
 
+        if (
+            contentMatches &&
+            wasBuffering &&
+            !snapshot.isBuffering &&
+            !inFlightSeek &&
+            broadcast == null &&
+            commands.isEmpty()
+        ) {
+            return mergeContentStartResume(applyKnownState(nowMs), nowMs)
+        }
+
         val status = if (known != null && !contentMatches) {
             WatchPartyParticipantStatus.SELECTING_SOURCE
         } else {
@@ -236,6 +277,27 @@ class WatchPartySyncEngine(
         )
     }
 
+    fun onBufferProbe(nowMs: Long): Output {
+        val known = lastKnownState ?: return Output()
+        val content = localContent ?: return Output()
+        if (!known.contentId.sameContentAs(content)) return Output()
+        val snapshot = lastSnapshot ?: return Output()
+        if (!snapshot.isBuffering) return Output()
+        if (seekInFlight(nowMs)) return Output()
+        if (!known.isPlaying) return Output()
+        val since = bufferingSinceMs ?: nowMs.also { bufferingSinceMs = it }
+        if (nowMs - since < config.bufferDebounceMs) return Output()
+        return Output(
+            broadcast = buildBroadcast(
+                isPlaying = false,
+                positionMs = snapshot.positionMs,
+                nowMs = nowMs,
+                reason = WatchPartyStateReason.BUFFER_HOLD,
+            ),
+            presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.BUFFERING),
+        )
+    }
+
     /**
      * Periodic silent drift correction (spec: every 10 s, tolerance 1.5 s).
      * Never broadcasts — it only realigns the local player.
@@ -246,6 +308,7 @@ class WatchPartySyncEngine(
         if (!state.contentId.sameContentAs(content)) return Output()
         val snapshot = lastSnapshot ?: return Output()
         if (snapshot.isBuffering) return Output()
+        if (seekInFlight(nowMs)) return Output()
 
         mergeContentStartResume(Output(), nowMs).let { if (it.broadcast != null) return it }
 
@@ -254,6 +317,7 @@ class WatchPartySyncEngine(
         if (abs(localMs - expectedMs) <= config.driftToleranceMs) return Output()
 
         pendingSeekTargetMs = expectedMs
+        pendingSeekIssuedAtMs = nowMs
         suppressUntilMs = nowMs + config.suppressWindowMs
         return Output(commands = listOf(WatchPartyPlayerCommand.SeekTo(expectedMs)))
     }
@@ -271,10 +335,11 @@ class WatchPartySyncEngine(
         var best: WatchPartyRoomState? = null
         for (payload in payloads) {
             val state = payload.lastKnownState ?: continue
-            if (best == null || state.isNewerThan(best)) best = state
+            observe(state)
+            if (best == null || state.supersedes(best)) best = state
         }
         if (best != null) {
-            if (best.isNewerThan(lastKnownState)) {
+            if (best.supersedes(lastKnownState)) {
                 lastKnownState = best
                 if (best.actorId != actorId) {
                     return mergeContentStartResume(applyKnownState(nowMs), nowMs)
