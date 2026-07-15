@@ -156,6 +156,12 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
 
 @Composable
 internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
+    LaunchedEffect(Unit) {
+        if (watchPartyDisplayName.isBlank()) {
+            watchPartyDisplayName = WatchPartyCoordinator.resolveDisplayName()
+        }
+    }
+
     val session by WatchPartyCoordinator.session.collectAsState()
     LaunchedEffect(session) {
         val active = session

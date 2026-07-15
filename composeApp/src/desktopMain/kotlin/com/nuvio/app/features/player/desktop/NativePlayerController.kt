@@ -8,6 +8,7 @@ import com.nuvio.app.features.player.PlayerControlFilterItem
 import com.nuvio.app.features.player.PlayerControlSeasonItem
 import com.nuvio.app.features.player.PlayerControlSourceItem
 import com.nuvio.app.features.player.PlayerControlSubtitleCueItem
+import com.nuvio.app.features.player.PlayerControlWatchPartyParticipant
 import com.nuvio.app.features.player.AudioTrack
 import com.nuvio.app.features.player.ParentalWarning
 import com.nuvio.app.features.player.PlayerControlsAction
@@ -944,6 +945,54 @@ private fun PlayerControlsState.toControlsJson(isFullscreen: Boolean): String =
         appendJsonArrayField("subtitleColorSwatches", SubtitleColorSwatches.map { it.toStorageHexString() }) { append(it.toJsonString()) }
         append(',')
         appendJsonField("closeModalsToken", closeModalsToken)
+        append(',')
+        appendJsonField("watchPartyLabel", watchPartyLabel)
+        append(',')
+        appendJsonField("watchPartyPanelTitle", watchPartyPanelTitle)
+        append(',')
+        appendJsonField("watchPartyNotConfiguredMessage", watchPartyNotConfiguredMessage)
+        append(',')
+        appendJsonField("watchPartyYourNameLabel", watchPartyYourNameLabel)
+        append(',')
+        appendJsonField("watchPartyCreateRoomLabel", watchPartyCreateRoomLabel)
+        append(',')
+        appendJsonField("watchPartyRoomCodeLabel", watchPartyRoomCodeLabel)
+        append(',')
+        appendJsonField("watchPartyJoinRoomLabel", watchPartyJoinRoomLabel)
+        append(',')
+        appendJsonField("watchPartyParticipantsLabel", watchPartyParticipantsLabel)
+        append(',')
+        appendJsonField("watchPartyAloneHint", watchPartyAloneHint)
+        append(',')
+        appendJsonField("watchPartyLeaveRoomLabel", watchPartyLeaveRoomLabel)
+        append(',')
+        appendJsonField("watchPartyReconnectingLabel", watchPartyReconnectingLabel)
+        append(',')
+        appendJsonField("watchPartyOpenPlaybackLabel", watchPartyOpenPlaybackLabel)
+        append(',')
+        appendJsonField("watchPartyNowWatchingText", watchPartyNowWatchingText)
+        append(',')
+        appendJsonField("watchPartyConfigured", watchPartyConfigured)
+        append(',')
+        appendJsonField("watchPartyActive", watchPartyActive)
+        append(',')
+        appendJsonField("watchPartyConnected", watchPartyConnected)
+        append(',')
+        appendJsonField("watchPartyRoomCode", watchPartyRoomCode)
+        append(',')
+        appendJsonField("watchPartyDisplayName", watchPartyDisplayName)
+        append(',')
+        appendJsonArrayField("watchPartyParticipants", watchPartyParticipants) { appendWatchPartyParticipantJson(it) }
+        append(',')
+        appendJsonField("watchPartyToastText", watchPartyToastText)
+        append(',')
+        appendJsonField("watchPartyPromptText", watchPartyPromptText)
+        append(',')
+        appendJsonField("watchPartyPromptShowEpisodes", watchPartyPromptShowEpisodes)
+        append(',')
+        appendJsonField("watchPartyPromptShowEpisodesLabel", watchPartyPromptShowEpisodesLabel)
+        append(',')
+        appendJsonField("watchPartyPromptDismissLabel", watchPartyPromptDismissLabel)
         append('}')
     }
 
@@ -997,6 +1046,16 @@ private inline fun <T> StringBuilder.appendJsonArrayField(
         appendValue(value)
     }
     append(']')
+}
+
+private fun StringBuilder.appendWatchPartyParticipantJson(item: PlayerControlWatchPartyParticipant) {
+    append('{')
+    appendJsonField("name", item.name)
+    append(',')
+    appendJsonField("status", item.status)
+    append(',')
+    appendJsonField("statusLabel", item.statusLabel)
+    append('}')
 }
 
 private fun StringBuilder.appendFilterItemJson(item: PlayerControlFilterItem) {

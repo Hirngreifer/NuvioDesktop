@@ -24,10 +24,18 @@ import com.nuvio.app.features.p2p.P2pStreamingState
 import com.nuvio.app.features.p2p.formatP2pMegabytes
 import com.nuvio.app.features.p2p.formatP2pSpeed
 import com.nuvio.app.features.player.skip.SkipIntroRepository
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import com.nuvio.app.features.streams.AddonStreamGroup
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.streams.isSelectableForPlayback
+import com.nuvio.app.features.watchparty.WatchPartyConnectionState
+import com.nuvio.app.features.watchparty.WatchPartyCoordinator
+import com.nuvio.app.features.watchparty.WatchPartyParticipantStatus
+import com.nuvio.app.features.watchparty.WatchPartyRoomCodes
+import com.nuvio.app.features.watchparty.WatchPartySupabaseProvider
 import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
+import io.ktor.http.decodeURLPart
 import com.nuvio.app.features.watching.application.WatchingState
 import com.nuvio.app.isDesktop
 import com.nuvio.app.isIos
@@ -163,6 +171,21 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
             )
         else -> ""
     }
+    val watchPartyRoomContentForControls by WatchPartyCoordinator.roomContent.collectAsState()
+    val watchPartyJoinPlaybackContent = watchPartyRoomContentForControls?.takeUnless { room ->
+        currentWatchPartyContentId()?.sameContentAs(room) == true
+    }
+    val watchPartyStatusLabels = mapOf(
+        WatchPartyParticipantStatus.PLAYING to stringResource(Res.string.watch_party_status_playing),
+        WatchPartyParticipantStatus.PAUSED to stringResource(Res.string.watch_party_status_paused),
+        WatchPartyParticipantStatus.BUFFERING to stringResource(Res.string.watch_party_status_buffering),
+        WatchPartyParticipantStatus.SELECTING_SOURCE to stringResource(Res.string.watch_party_status_selecting_source),
+        WatchPartyParticipantStatus.IDLE to stringResource(Res.string.watch_party_status_idle),
+    )
+    val watchPartyToastTextForControls = watchPartyToast?.let { toast ->
+        stringResource(toast.messageRes, *toast.args.toTypedArray())
+    }.orEmpty()
+    val watchPartyPromptForControls = watchPartyContentPrompt
     val playerControlsState = PlayerControlsState(
         title = title,
         episodeText = episodeText,
@@ -329,6 +352,46 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
             stringResource(Res.string.player_next_episode_unaired)
         },
         nextEpisodePlayable = nextEpisodeForControls?.hasAired == true,
+        watchPartyLabel = if (watchPartySessionState.isActive) {
+            stringResource(Res.string.compose_player_watch_party_with_count, watchPartySessionState.participants.size)
+        } else {
+            stringResource(Res.string.compose_player_watch_party)
+        },
+        watchPartyPanelTitle = stringResource(Res.string.watch_party_panel_title),
+        watchPartyNotConfiguredMessage = stringResource(Res.string.watch_party_not_configured),
+        watchPartyYourNameLabel = stringResource(Res.string.watch_party_your_name),
+        watchPartyCreateRoomLabel = stringResource(Res.string.watch_party_create_room),
+        watchPartyRoomCodeLabel = stringResource(Res.string.watch_party_room_code),
+        watchPartyJoinRoomLabel = stringResource(Res.string.watch_party_join_room),
+        watchPartyParticipantsLabel = stringResource(Res.string.watch_party_participants),
+        watchPartyAloneHint = stringResource(Res.string.watch_party_alone_hint),
+        watchPartyLeaveRoomLabel = stringResource(Res.string.watch_party_leave_room),
+        watchPartyReconnectingLabel = stringResource(Res.string.watch_party_reconnecting),
+        watchPartyOpenPlaybackLabel = stringResource(Res.string.watch_party_open_playback),
+        watchPartyNowWatchingText = watchPartyJoinPlaybackContent?.let { content ->
+            stringResource(Res.string.watch_party_now_watching, content.displayTitle)
+        }.orEmpty(),
+        watchPartyConfigured = WatchPartySupabaseProvider.isConfigured,
+        watchPartyActive = watchPartySessionState.isActive,
+        watchPartyConnected = watchPartySessionState.connection == WatchPartyConnectionState.CONNECTED,
+        watchPartyRoomCode = watchPartySessionState.roomCode.orEmpty(),
+        watchPartyDisplayName = watchPartyDisplayName,
+        watchPartyParticipants = watchPartySessionState.participants.map { participant ->
+            PlayerControlWatchPartyParticipant(
+                name = participant.displayName,
+                status = participant.status.name.lowercase(),
+                statusLabel = watchPartyStatusLabels[participant.status].orEmpty(),
+            )
+        },
+        watchPartyToastText = watchPartyToastTextForControls,
+        watchPartyPromptText = watchPartyPromptForControls?.let { prompt ->
+            stringResource(Res.string.watch_party_prompt_title, prompt.displayTitle)
+        }.orEmpty(),
+        watchPartyPromptShowEpisodes = watchPartyPromptForControls != null &&
+            watchPartyPromptForControls.metaId == parentMetaId &&
+            isSeries,
+        watchPartyPromptShowEpisodesLabel = stringResource(Res.string.watch_party_prompt_show_episodes),
+        watchPartyPromptDismissLabel = stringResource(Res.string.watch_party_prompt_dismiss),
     )
     val gestureCallbacks = rememberSurfaceGestureCallbacks()
 
@@ -508,6 +571,19 @@ private fun PlayerScreenRuntime.RenderPlayerControls(displayedPositionMs: Long, 
             } else {
                 0
             },
+            watchPartyBadge = if (watchPartySessionState.isActive) {
+                {
+                    WatchPartyBadgePill(
+                        sessionState = watchPartySessionState,
+                        onClick = {
+                            showWatchPartyPanel = true
+                            controlsVisible = true
+                        },
+                    )
+                }
+            } else {
+                null
+            },
             onOpenInExternalPlayer = args.onOpenInExternalPlayer?.let { openExternal ->
                 {
                     val loadedSubtitles = addonSubtitles
@@ -649,11 +725,35 @@ private fun PlayerScreenRuntime.handlePlayerControlsAction(action: PlayerControl
     return true
 }
 
+private const val WATCH_PARTY_NAME_EVENT_PREFIX = "watchPartyName:"
+private const val WATCH_PARTY_JOIN_EVENT_PREFIX = "watchPartyJoin:"
+
 private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: Double): Boolean {
     if (type.shouldLogPlayerControlsEvent()) {
         playerControlsLog.d { "event type=$type value=$value ${playerControlLogContext()}" }
     }
+    if (type.startsWith(WATCH_PARTY_NAME_EVENT_PREFIX)) {
+        watchPartyDisplayName = type.removePrefix(WATCH_PARTY_NAME_EVENT_PREFIX).decodeURLPart()
+        return true
+    }
+    if (type.startsWith(WATCH_PARTY_JOIN_EVENT_PREFIX)) {
+        val code = WatchPartyRoomCodes.normalize(type.removePrefix(WATCH_PARTY_JOIN_EVENT_PREFIX).decodeURLPart())
+        if (WatchPartyRoomCodes.isValid(code)) {
+            joinWatchPartyRoom(code)
+        }
+        return true
+    }
     when (type) {
+        "watchPartyCreate" -> createWatchPartyRoom()
+        "watchPartyLeave" -> leaveWatchParty()
+        "watchPartyJoinPlayback" -> WatchPartyCoordinator.requestManualFollow()
+        "watchPartyPromptEpisodes" -> {
+            watchPartyContentPrompt = null
+        }
+        "watchPartyPromptDismiss" -> {
+            watchPartyDismissedPrompt = watchPartyContentPrompt
+            watchPartyContentPrompt = null
+        }
         "cursorActivity" -> {
             if (!playerControlsLocked) {
                 controlsVisible = true

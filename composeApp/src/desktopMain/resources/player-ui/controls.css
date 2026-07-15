@@ -2319,6 +2319,109 @@ button.action:focus-visible {
   gap: 10px;
 }
 
+.header-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--header-button);
+  padding-inline: 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .5);
+  border: 1px solid rgba(255, 255, 255, .2);
+  color: var(--theme-control-foreground);
+  font-size: 13px;
+  font-weight: 600;
+  transform: translateZ(0);
+  transition:
+    transform var(--motion-fast) var(--ease-out),
+    background-color var(--motion-standard) ease,
+    opacity var(--motion-standard) ease;
+}
+
+.header-pill:hover {
+  background: var(--theme-selected-surface);
+}
+
+.header-pill:active,
+.header-pill.is-pressed {
+  transform: scale(.94);
+}
+
+.header-pill svg {
+  width: 16px;
+  height: 16px;
+}
+
+.watch-party-float {
+  position: absolute;
+  top: calc(var(--slider-bottom) + env(safe-area-inset-top));
+  right: var(--hp);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--header-button);
+  padding-inline: 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .5);
+  border: 1px solid rgba(255, 255, 255, .2);
+  color: var(--theme-control-foreground);
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-standard) ease;
+}
+
+.watch-party-float svg {
+  width: 16px;
+  height: 16px;
+}
+
+.player.chrome-hidden .watch-party-float,
+.player.locked .watch-party-float {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.player.opening-active .watch-party-float,
+.player.error-active .watch-party-float {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.watch-party-room-code {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  color: var(--theme-control-foreground);
+}
+
+.watch-party-hint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, .65);
+}
+
+.watch-party-participants {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.watch-party-participant-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  color: var(--theme-control-foreground);
+  font-size: 14px;
+}
+
+.watch-party-participant-row svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  opacity: .65;
+}
+
 @media (max-width: 760px) {
   .header {
     left: var(--hp);

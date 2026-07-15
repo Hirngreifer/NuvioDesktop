@@ -92,6 +92,7 @@ internal fun PlayerControlsShell(
     onEpisodesClick: (() -> Unit)? = null,
     onWatchPartyClick: (() -> Unit)? = null,
     watchPartyParticipantCount: Int = 0,
+    watchPartyBadge: (@Composable () -> Unit)? = null,
     onOpenInExternalPlayer: (() -> Unit)? = null,
     onSubmitIntroClick: (() -> Unit)? = null,
     parentalWarnings: List<ParentalWarning> = emptyList(),
@@ -156,6 +157,7 @@ internal fun PlayerControlsShell(
                 onVideoSettingsClick = onVideoSettingsClick,
                 onOpenInExternalPlayer = onOpenInExternalPlayer,
                 onBack = onBack,
+                watchPartyBadge = watchPartyBadge,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .fillMaxWidth()
@@ -232,6 +234,7 @@ private fun PlayerHeader(
     onVideoSettingsClick: (() -> Unit)?,
     onOpenInExternalPlayer: (() -> Unit)?,
     onBack: () -> Unit,
+    watchPartyBadge: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val typeScale = MaterialTheme.nuvioTypeScale
@@ -321,6 +324,9 @@ private fun PlayerHeader(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (watchPartyBadge != null) {
+                        watchPartyBadge()
+                    }
                     if (onSubmitIntroClick != null) {
                         PlayerHeaderIconButton(
                             icon = Icons.Rounded.Flag,

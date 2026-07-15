@@ -153,6 +153,35 @@ const p2pConsentCancelButton = document.getElementById("p2pConsentCancelButton")
 const p2pConsentEnableButton = document.getElementById("p2pConsentEnableButton");
 const playerToast = document.getElementById("playerToast");
 const playerToastText = document.getElementById("playerToastText");
+const watchPartyButton = document.getElementById("watchPartyButton");
+const watchPartyLabel = document.getElementById("watchPartyLabel");
+const watchPartyBadge = document.getElementById("watchPartyBadge");
+const watchPartyBadgeText = document.getElementById("watchPartyBadgeText");
+const watchPartyFloatBadge = document.getElementById("watchPartyFloatBadge");
+const watchPartyFloatText = document.getElementById("watchPartyFloatText");
+const watchPartyModal = document.getElementById("watchPartyModal");
+const watchPartyPanelTitle = document.getElementById("watchPartyPanelTitle");
+const watchPartyCloseButton = document.getElementById("watchPartyCloseButton");
+const watchPartyNotConfigured = document.getElementById("watchPartyNotConfigured");
+const watchPartySetupView = document.getElementById("watchPartySetupView");
+const watchPartyNameLabel = document.getElementById("watchPartyNameLabel");
+const watchPartyNameInput = document.getElementById("watchPartyNameInput");
+const watchPartyCreateButton = document.getElementById("watchPartyCreateButton");
+const watchPartyCodeLabel = document.getElementById("watchPartyCodeLabel");
+const watchPartyCodeInput = document.getElementById("watchPartyCodeInput");
+const watchPartyJoinButton = document.getElementById("watchPartyJoinButton");
+const watchPartyActiveView = document.getElementById("watchPartyActiveView");
+const watchPartyRoomCodeText = document.getElementById("watchPartyRoomCode");
+const watchPartyNowWatching = document.getElementById("watchPartyNowWatching");
+const watchPartyJoinPlaybackButton = document.getElementById("watchPartyJoinPlaybackButton");
+const watchPartyParticipantsLabel = document.getElementById("watchPartyParticipantsLabel");
+const watchPartyAloneHint = document.getElementById("watchPartyAloneHint");
+const watchPartyParticipantList = document.getElementById("watchPartyParticipantList");
+const watchPartyLeaveButton = document.getElementById("watchPartyLeaveButton");
+const watchPartyPromptModal = document.getElementById("watchPartyPromptModal");
+const watchPartyPromptTextBody = document.getElementById("watchPartyPromptText");
+const watchPartyPromptDismissButton = document.getElementById("watchPartyPromptDismissButton");
+const watchPartyPromptEpisodesButton = document.getElementById("watchPartyPromptEpisodesButton");
 
 let state = {
   title: "",
@@ -314,6 +343,30 @@ let state = {
   },
   subtitleColorSwatches: [],
   closeModalsToken: 0,
+  watchPartyLabel: "Party",
+  watchPartyPanelTitle: "Watch Party",
+  watchPartyNotConfiguredMessage: "",
+  watchPartyYourNameLabel: "Your name",
+  watchPartyCreateRoomLabel: "Create room",
+  watchPartyRoomCodeLabel: "Room code",
+  watchPartyJoinRoomLabel: "Join",
+  watchPartyParticipantsLabel: "Participants",
+  watchPartyAloneHint: "",
+  watchPartyLeaveRoomLabel: "Leave room",
+  watchPartyReconnectingLabel: "Reconnecting…",
+  watchPartyOpenPlaybackLabel: "Go to playback",
+  watchPartyNowWatchingText: "",
+  watchPartyConfigured: false,
+  watchPartyActive: false,
+  watchPartyConnected: false,
+  watchPartyRoomCode: "",
+  watchPartyDisplayName: "",
+  watchPartyParticipants: [],
+  watchPartyToastText: "",
+  watchPartyPromptText: "",
+  watchPartyPromptShowEpisodes: false,
+  watchPartyPromptShowEpisodesLabel: "Show episodes",
+  watchPartyPromptDismissLabel: "Dismiss",
 };
 let isScrubbing = false;
 let scrubPositionMs = 0;
@@ -803,6 +856,8 @@ const modalByName = {
   episodes: episodesModal,
   submitIntro: submitIntroModal,
   p2pConsent: p2pConsentModal,
+  watchParty: watchPartyModal,
+  watchPartyPrompt: watchPartyPromptModal,
 };
 const modalElements = Object.values(modalByName);
 const modalCloseTimers = new Map();
@@ -853,6 +908,9 @@ const closePlayerModal = (notifyDismiss = false, animated = true) => {
   if (notifyDismiss && closingModal === "p2pConsent") {
     send("cancelP2pForPlayerControls", 0);
   }
+  if (notifyDismiss && closingModal === "watchPartyPrompt") {
+    send("watchPartyPromptDismiss", 0);
+  }
   renderChrome();
 };
 
@@ -870,6 +928,10 @@ const openPlayerModal = modal => {
       endTime: state.submitIntroEndTime || "00:00",
       status: "",
     };
+  }
+  if (modal === "watchParty") {
+    watchPartyNameInput.value = state.watchPartyDisplayName || "";
+    watchPartyCodeInput.value = "";
   }
   renderActiveModal();
   modalElements.forEach(modalElement => {
@@ -1538,6 +1600,98 @@ const renderP2pConsentModal = () => {
   p2pConsentEnableButton.textContent = state.p2pConsentEnableLabel || "Enable P2P";
 };
 
+const WATCH_PARTY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const WATCH_PARTY_CODE_LENGTH = 6;
+
+const normalizedWatchPartyCode = value =>
+  String(value || "")
+    .toUpperCase()
+    .split("")
+    .filter(char => WATCH_PARTY_CODE_ALPHABET.includes(char))
+    .join("")
+    .slice(0, WATCH_PARTY_CODE_LENGTH);
+
+const watchPartyStatusIcon = status => {
+  switch (String(status || "")) {
+    case "playing": return "#icon-play";
+    case "paused": return "#icon-pause";
+    case "buffering": return "#icon-hourglass";
+    case "selecting_source": return "#icon-search";
+    default: return "#icon-person";
+  }
+};
+
+const sendWatchPartyDisplayName = () => {
+  send(`watchPartyName:${encodeURIComponent(watchPartyNameInput.value.trim())}`, 0);
+};
+
+const renderWatchPartyModal = () => {
+  const configured = Boolean(state.watchPartyConfigured);
+  const active = Boolean(state.watchPartyActive);
+  watchPartyPanelTitle.textContent = state.watchPartyPanelTitle || "Watch Party";
+  watchPartyCloseButton.textContent = state.panelCloseLabel || "Close";
+  setText(watchPartyNotConfigured, configured ? "" : (state.watchPartyNotConfiguredMessage || ""));
+  setVisible(watchPartySetupView, configured && !active);
+  setVisible(watchPartyActiveView, configured && active);
+
+  watchPartyNameLabel.textContent = state.watchPartyYourNameLabel || "Your name";
+  watchPartyCreateButton.textContent = state.watchPartyCreateRoomLabel || "Create room";
+  watchPartyCodeLabel.textContent = state.watchPartyRoomCodeLabel || "Room code";
+  watchPartyJoinButton.textContent = state.watchPartyJoinRoomLabel || "Join";
+  if (document.activeElement !== watchPartyNameInput && !watchPartyNameInput.value) {
+    watchPartyNameInput.value = state.watchPartyDisplayName || "";
+  }
+  watchPartyJoinButton.disabled = normalizedWatchPartyCode(watchPartyCodeInput.value).length !== WATCH_PARTY_CODE_LENGTH;
+
+  watchPartyRoomCodeText.textContent = state.watchPartyRoomCode || "";
+  setText(watchPartyNowWatching, state.watchPartyNowWatchingText);
+  watchPartyJoinPlaybackButton.textContent = state.watchPartyOpenPlaybackLabel || "Go to playback";
+  setVisible(watchPartyJoinPlaybackButton, Boolean(state.watchPartyNowWatchingText));
+  watchPartyParticipantsLabel.textContent = state.watchPartyParticipantsLabel || "Participants";
+  const participants = Array.isArray(state.watchPartyParticipants) ? state.watchPartyParticipants : [];
+  setText(watchPartyAloneHint, participants.length <= 1 ? (state.watchPartyAloneHint || "") : "");
+  watchPartyParticipantList.replaceChildren();
+  participants.forEach(participant => {
+    const row = document.createElement("div");
+    row.className = "watch-party-participant-row";
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", watchPartyStatusIcon(participant.status));
+    svg.appendChild(use);
+    if (participant.statusLabel) {
+      svg.setAttribute("aria-label", participant.statusLabel);
+    }
+    const name = document.createElement("span");
+    name.textContent = participant.name || "";
+    row.appendChild(svg);
+    row.appendChild(name);
+    watchPartyParticipantList.appendChild(row);
+  });
+  watchPartyLeaveButton.textContent = state.watchPartyLeaveRoomLabel || "Leave room";
+};
+
+const renderWatchPartyPromptModal = () => {
+  watchPartyPromptTextBody.textContent = state.watchPartyPromptText || "";
+  watchPartyPromptDismissButton.textContent = state.watchPartyPromptDismissLabel || "Dismiss";
+  watchPartyPromptEpisodesButton.textContent = state.watchPartyPromptShowEpisodesLabel || "Show episodes";
+  setVisible(watchPartyPromptEpisodesButton, Boolean(state.watchPartyPromptShowEpisodes));
+};
+
+const renderWatchPartyChrome = () => {
+  const active = Boolean(state.watchPartyActive);
+  const badgeText = state.watchPartyConnected
+    ? String((state.watchPartyParticipants || []).length)
+    : (state.watchPartyReconnectingLabel || "Reconnecting…");
+  watchPartyLabel.textContent = state.watchPartyLabel || "Party";
+  setActionButtonLabel("watchParty", state.watchPartyLabel || "Party");
+  setVisible(watchPartyBadge, active);
+  watchPartyBadgeText.textContent = badgeText;
+  watchPartyBadge.setAttribute("aria-label", state.watchPartyPanelTitle || "Watch Party");
+  setVisible(watchPartyFloatBadge, active);
+  watchPartyFloatText.textContent = badgeText;
+  watchPartyFloatBadge.setAttribute("aria-label", state.watchPartyPanelTitle || "Watch Party");
+};
+
 const renderActiveModal = () => {
   if (activeModal === "audio") renderAudioTrackList();
   if (activeModal === "subtitles") renderSubtitleModal();
@@ -1545,6 +1699,8 @@ const renderActiveModal = () => {
   if (activeModal === "episodes") renderEpisodesModal();
   if (activeModal === "submitIntro") renderSubmitIntroModal();
   if (activeModal === "p2pConsent") renderP2pConsentModal();
+  if (activeModal === "watchParty") renderWatchPartyModal();
+  if (activeModal === "watchPartyPrompt") renderWatchPartyPromptModal();
 };
 
 window.nuvioNativeViewportChanged = () => {
@@ -1873,6 +2029,7 @@ const renderChrome = () => {
   setVisible(videoSettingsButton, Boolean(state.showVideoSettings));
   setVisible(sourcesButton, Boolean(state.showSources));
   setVisible(episodesButton, Boolean(state.showEpisodes));
+  renderWatchPartyChrome();
   syncActionFocusState();
 
   const playPauseLabel = isPlaying ? state.pauseLabel : state.playLabel;
@@ -2182,6 +2339,10 @@ document.querySelectorAll("[data-command]").forEach(button => {
       openPlayerModal("submitIntro");
       return;
     }
+    if (command === "watchParty") {
+      openPlayerModal("watchParty");
+      return;
+    }
     if (command === "toggleFullscreen") {
       togglePlayerFullscreen();
       return;
@@ -2405,6 +2566,62 @@ p2pConsentEnableButton.addEventListener("click", event => {
   send("enableP2pForPlayerControls", 0);
 });
 
+watchPartyCloseButton.addEventListener("click", event => {
+  event.stopPropagation();
+  closePlayerModal(true);
+});
+watchPartyNameInput.addEventListener("change", event => {
+  event.stopPropagation();
+  sendWatchPartyDisplayName();
+});
+watchPartyCodeInput.addEventListener("input", event => {
+  event.stopPropagation();
+  const normalized = normalizedWatchPartyCode(watchPartyCodeInput.value);
+  if (watchPartyCodeInput.value !== normalized) {
+    watchPartyCodeInput.value = normalized;
+  }
+  watchPartyJoinButton.disabled = normalized.length !== WATCH_PARTY_CODE_LENGTH;
+});
+watchPartyCreateButton.addEventListener("click", event => {
+  event.stopPropagation();
+  sendWatchPartyDisplayName();
+  send("watchPartyCreate", 0);
+});
+watchPartyJoinButton.addEventListener("click", event => {
+  event.stopPropagation();
+  const code = normalizedWatchPartyCode(watchPartyCodeInput.value);
+  if (code.length !== WATCH_PARTY_CODE_LENGTH) return;
+  sendWatchPartyDisplayName();
+  send(`watchPartyJoin:${code}`, 0);
+});
+watchPartyJoinPlaybackButton.addEventListener("click", event => {
+  event.stopPropagation();
+  send("watchPartyJoinPlayback", 0);
+  closePlayerModal();
+});
+watchPartyLeaveButton.addEventListener("click", event => {
+  event.stopPropagation();
+  send("watchPartyLeave", 0);
+  closePlayerModal();
+});
+watchPartyFloatBadge.addEventListener("click", event => {
+  event.stopPropagation();
+  noteChromeActivity(true);
+  openPlayerModal("watchParty");
+});
+watchPartyPromptDismissButton.addEventListener("click", event => {
+  event.stopPropagation();
+  send("watchPartyPromptDismiss", 0);
+  closePlayerModal();
+});
+watchPartyPromptEpisodesButton.addEventListener("click", event => {
+  event.stopPropagation();
+  send("watchPartyPromptEpisodes", 0);
+  episodeStreamFilterId = "";
+  openPlayerModal("episodes");
+  send("episodes", 0);
+});
+
 skipPrompt.addEventListener("click", event => {
   event.stopPropagation();
   send("skipInterval", 0);
@@ -2471,6 +2688,7 @@ window.playerControls = nextState => {
   const previousResizeLabel = state.resizeModeLabel || "";
   const previousSpeedLabel = state.playbackSpeedLabel || "";
   const previousVolumeLevel = typeof state.volumeLevel === "number" ? state.volumeLevel : NaN;
+  const previousWatchPartyToast = state.watchPartyToastText || "";
   state = { ...state, ...nextState };
   hasReceivedPlayerControls = true;
   const closeToken = Number(state.closeModalsToken) || 0;
@@ -2481,6 +2699,15 @@ window.playerControls = nextState => {
     openPlayerModal("p2pConsent");
   } else if (!state.showP2pConsent && activeModal === "p2pConsent") {
     closePlayerModal();
+  }
+  if (state.watchPartyPromptText && activeModal !== "watchPartyPrompt" && activeModal !== "p2pConsent") {
+    openPlayerModal("watchPartyPrompt");
+  } else if (!state.watchPartyPromptText && activeModal === "watchPartyPrompt") {
+    closePlayerModal();
+  }
+  const nextWatchPartyToast = state.watchPartyToastText || "";
+  if (nextWatchPartyToast && nextWatchPartyToast !== previousWatchPartyToast) {
+    showPlayerToast(nextWatchPartyToast);
   }
   render();
   if (pendingSettingToastCommand === "resize" && (state.resizeModeLabel || "") !== previousResizeLabel) {

@@ -200,6 +200,36 @@ data class PlayerControlsState(
     val subtitleAutoSyncIsLoading: Boolean = false,
     val subtitleAutoSyncErrorMessage: String = "",
     val closeModalsToken: Long = 0L,
+    val watchPartyLabel: String = "Party",
+    val watchPartyPanelTitle: String = "Watch Party",
+    val watchPartyNotConfiguredMessage: String = "",
+    val watchPartyYourNameLabel: String = "Your name",
+    val watchPartyCreateRoomLabel: String = "Create room",
+    val watchPartyRoomCodeLabel: String = "Room code",
+    val watchPartyJoinRoomLabel: String = "Join",
+    val watchPartyParticipantsLabel: String = "Participants",
+    val watchPartyAloneHint: String = "",
+    val watchPartyLeaveRoomLabel: String = "Leave room",
+    val watchPartyReconnectingLabel: String = "Reconnecting…",
+    val watchPartyOpenPlaybackLabel: String = "Go to playback",
+    val watchPartyNowWatchingText: String = "",
+    val watchPartyConfigured: Boolean = false,
+    val watchPartyActive: Boolean = false,
+    val watchPartyConnected: Boolean = false,
+    val watchPartyRoomCode: String = "",
+    val watchPartyDisplayName: String = "",
+    val watchPartyParticipants: List<PlayerControlWatchPartyParticipant> = emptyList(),
+    val watchPartyToastText: String = "",
+    val watchPartyPromptText: String = "",
+    val watchPartyPromptShowEpisodes: Boolean = false,
+    val watchPartyPromptShowEpisodesLabel: String = "Show episodes",
+    val watchPartyPromptDismissLabel: String = "Dismiss",
+)
+
+data class PlayerControlWatchPartyParticipant(
+    val name: String = "",
+    val status: String = "idle",
+    val statusLabel: String = "",
 )
 
 data class PlayerControlFilterItem(

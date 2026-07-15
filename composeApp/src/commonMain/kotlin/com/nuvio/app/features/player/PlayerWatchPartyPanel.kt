@@ -75,8 +75,11 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
         }
     }
 
+    val isInPip = rememberIsInPictureInPicture()
+    val headerBadgeVisible = controlsVisible && !playerControlsLocked && !isInPip
     WatchPartyBadge(
         sessionState = watchPartySessionState,
+        visible = !headerBadgeVisible,
         onClick = {
             showWatchPartyPanel = true
             controlsVisible = true
@@ -126,41 +129,50 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
 @Composable
 private fun WatchPartyBadge(
     sessionState: WatchPartySessionState,
+    visible: Boolean,
     onClick: () -> Unit,
 ) {
-    if (!sessionState.isActive) return
+    if (!sessionState.isActive || !visible) return
     Box(modifier = Modifier.fillMaxSize()) {
-        Surface(
-            color = Color.Black.copy(alpha = 0.5f),
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
-                .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(24.dp))
-                .clip(RoundedCornerShape(24.dp))
-                .clickable(onClick = onClick),
+        Box(modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)) {
+            WatchPartyBadgePill(sessionState = sessionState, onClick = onClick)
+        }
+    }
+}
+
+@Composable
+internal fun WatchPartyBadgePill(
+    sessionState: WatchPartySessionState,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier
+            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Groups,
-                    contentDescription = stringResource(Res.string.watch_party_panel_title),
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    text = if (sessionState.connection == WatchPartyConnectionState.CONNECTED) {
-                        sessionState.participants.size.toString()
-                    } else {
-                        stringResource(Res.string.watch_party_reconnecting)
-                    },
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
+            Icon(
+                imageVector = Icons.Rounded.Groups,
+                contentDescription = stringResource(Res.string.watch_party_panel_title),
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = if (sessionState.connection == WatchPartyConnectionState.CONNECTED) {
+                    sessionState.participants.size.toString()
+                } else {
+                    stringResource(Res.string.watch_party_reconnecting)
+                },
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+            )
         }
     }
 }
