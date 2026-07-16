@@ -26,6 +26,9 @@ import com.nuvio.app.features.player.toStorageHexString
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import io.ktor.http.decodeURLPart
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import javax.swing.SwingUtilities
 import kotlin.concurrent.Volatile
 
@@ -229,6 +232,13 @@ internal class NativePlayerController(
             }
             "volumeChange" -> setFallbackVolume(value.toFloat())
             else -> {
+                if (type.startsWith("watchPartyCopyCode:")) {
+                    val text = type.removePrefix("watchPartyCopyCode:").decodeURLPart()
+                    runCatching {
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+                    }.onFailure { error -> log.w(error) { "Failed to copy watch party code" } }
+                    return
+                }
                 val eventHandled = onEvent(type, value)
                 if (type.shouldLogNativeControlEvent()) {
                     log.d { "event delegated type=$type handled=$eventHandled handle=$handle" }
@@ -993,6 +1003,16 @@ private fun PlayerControlsState.toControlsJson(isFullscreen: Boolean): String =
         appendJsonField("watchPartyPromptShowEpisodesLabel", watchPartyPromptShowEpisodesLabel)
         append(',')
         appendJsonField("watchPartyPromptDismissLabel", watchPartyPromptDismissLabel)
+        append(',')
+        appendJsonField("watchPartyMovePromptText", watchPartyMovePromptText)
+        append(',')
+        appendJsonField("watchPartyMovePromptConfirmLabel", watchPartyMovePromptConfirmLabel)
+        append(',')
+        appendJsonField("watchPartyMovePromptDeclineLabel", watchPartyMovePromptDeclineLabel)
+        append(',')
+        appendJsonField("watchPartyCopyCodeLabel", watchPartyCopyCodeLabel)
+        append(',')
+        appendJsonField("watchPartyCodeCopiedText", watchPartyCodeCopiedText)
         append('}')
     }
 

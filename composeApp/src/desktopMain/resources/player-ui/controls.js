@@ -172,6 +172,7 @@ const watchPartyCodeInput = document.getElementById("watchPartyCodeInput");
 const watchPartyJoinButton = document.getElementById("watchPartyJoinButton");
 const watchPartyActiveView = document.getElementById("watchPartyActiveView");
 const watchPartyRoomCodeText = document.getElementById("watchPartyRoomCode");
+const watchPartyCopyCodeButton = document.getElementById("watchPartyCopyCodeButton");
 const watchPartyNowWatching = document.getElementById("watchPartyNowWatching");
 const watchPartyJoinPlaybackButton = document.getElementById("watchPartyJoinPlaybackButton");
 const watchPartyParticipantsLabel = document.getElementById("watchPartyParticipantsLabel");
@@ -182,6 +183,10 @@ const watchPartyPromptModal = document.getElementById("watchPartyPromptModal");
 const watchPartyPromptTextBody = document.getElementById("watchPartyPromptText");
 const watchPartyPromptDismissButton = document.getElementById("watchPartyPromptDismissButton");
 const watchPartyPromptEpisodesButton = document.getElementById("watchPartyPromptEpisodesButton");
+const watchPartyMoveModal = document.getElementById("watchPartyMoveModal");
+const watchPartyMoveTextBody = document.getElementById("watchPartyMoveText");
+const watchPartyMoveDeclineButton = document.getElementById("watchPartyMoveDeclineButton");
+const watchPartyMoveConfirmButton = document.getElementById("watchPartyMoveConfirmButton");
 
 let state = {
   title: "",
@@ -367,6 +372,11 @@ let state = {
   watchPartyPromptShowEpisodes: false,
   watchPartyPromptShowEpisodesLabel: "Show episodes",
   watchPartyPromptDismissLabel: "Dismiss",
+  watchPartyMovePromptText: "",
+  watchPartyMovePromptConfirmLabel: "Move party",
+  watchPartyMovePromptDeclineLabel: "Just for me",
+  watchPartyCopyCodeLabel: "Copy room code",
+  watchPartyCodeCopiedText: "Code copied",
 };
 let isScrubbing = false;
 let scrubPositionMs = 0;
@@ -858,6 +868,7 @@ const modalByName = {
   p2pConsent: p2pConsentModal,
   watchParty: watchPartyModal,
   watchPartyPrompt: watchPartyPromptModal,
+  watchPartyMove: watchPartyMoveModal,
 };
 const modalElements = Object.values(modalByName);
 const modalCloseTimers = new Map();
@@ -910,6 +921,9 @@ const closePlayerModal = (notifyDismiss = false, animated = true) => {
   }
   if (notifyDismiss && closingModal === "watchPartyPrompt") {
     send("watchPartyPromptDismiss", 0);
+  }
+  if (notifyDismiss && closingModal === "watchPartyMove") {
+    send("watchPartyMoveDecline", 0);
   }
   renderChrome();
 };
@@ -1644,6 +1658,9 @@ const renderWatchPartyModal = () => {
   watchPartyJoinButton.disabled = normalizedWatchPartyCode(watchPartyCodeInput.value).length !== WATCH_PARTY_CODE_LENGTH;
 
   watchPartyRoomCodeText.textContent = state.watchPartyRoomCode || "";
+  watchPartyCopyCodeButton.setAttribute("aria-label", state.watchPartyCopyCodeLabel || "Copy room code");
+  watchPartyCopyCodeButton.setAttribute("title", state.watchPartyCopyCodeLabel || "Copy room code");
+  setVisible(watchPartyCopyCodeButton, Boolean(state.watchPartyRoomCode));
   setText(watchPartyNowWatching, state.watchPartyNowWatchingText);
   watchPartyJoinPlaybackButton.textContent = state.watchPartyOpenPlaybackLabel || "Go to playback";
   setVisible(watchPartyJoinPlaybackButton, Boolean(state.watchPartyNowWatchingText));
@@ -1677,6 +1694,12 @@ const renderWatchPartyPromptModal = () => {
   setVisible(watchPartyPromptEpisodesButton, Boolean(state.watchPartyPromptShowEpisodes));
 };
 
+const renderWatchPartyMoveModal = () => {
+  watchPartyMoveTextBody.textContent = state.watchPartyMovePromptText || "";
+  watchPartyMoveDeclineButton.textContent = state.watchPartyMovePromptDeclineLabel || "Just for me";
+  watchPartyMoveConfirmButton.textContent = state.watchPartyMovePromptConfirmLabel || "Move party";
+};
+
 const renderWatchPartyChrome = () => {
   const active = Boolean(state.watchPartyActive);
   const badgeText = state.watchPartyConnected
@@ -1701,6 +1724,7 @@ const renderActiveModal = () => {
   if (activeModal === "p2pConsent") renderP2pConsentModal();
   if (activeModal === "watchParty") renderWatchPartyModal();
   if (activeModal === "watchPartyPrompt") renderWatchPartyPromptModal();
+  if (activeModal === "watchPartyMove") renderWatchPartyMoveModal();
 };
 
 window.nuvioNativeViewportChanged = () => {
@@ -2621,6 +2645,23 @@ watchPartyPromptEpisodesButton.addEventListener("click", event => {
   openPlayerModal("episodes");
   send("episodes", 0);
 });
+watchPartyMoveConfirmButton.addEventListener("click", event => {
+  event.stopPropagation();
+  send("watchPartyMoveConfirm", 0);
+  closePlayerModal();
+});
+watchPartyCopyCodeButton.addEventListener("click", event => {
+  event.stopPropagation();
+  const code = state.watchPartyRoomCode || "";
+  if (!code) return;
+  send(`watchPartyCopyCode:${encodeURIComponent(code)}`, 0);
+  showPlayerToast(state.watchPartyCodeCopiedText || "Code copied");
+});
+watchPartyMoveDeclineButton.addEventListener("click", event => {
+  event.stopPropagation();
+  send("watchPartyMoveDecline", 0);
+  closePlayerModal();
+});
 
 skipPrompt.addEventListener("click", event => {
   event.stopPropagation();
@@ -2703,6 +2744,16 @@ window.playerControls = nextState => {
   if (state.watchPartyPromptText && activeModal !== "watchPartyPrompt" && activeModal !== "p2pConsent") {
     openPlayerModal("watchPartyPrompt");
   } else if (!state.watchPartyPromptText && activeModal === "watchPartyPrompt") {
+    closePlayerModal();
+  }
+  if (
+    state.watchPartyMovePromptText &&
+    activeModal !== "watchPartyMove" &&
+    activeModal !== "p2pConsent" &&
+    activeModal !== "watchPartyPrompt"
+  ) {
+    openPlayerModal("watchPartyMove");
+  } else if (!state.watchPartyMovePromptText && activeModal === "watchPartyMove") {
     closePlayerModal();
   }
   const nextWatchPartyToast = state.watchPartyToastText || "";

@@ -152,13 +152,14 @@ class WatchPartySyncEngineDriftPresenceTest {
     }
 
     @Test
-    fun initialContentDeliveryNeverBroadcasts() {
+    fun initialSameSeriesContentDeliveryMovesTheRoom() {
         val engine = WatchPartySyncEngine("actor-local")
         engine.onRemoteState(testState(seq = 3, contentId = testContent(episode = 9)), 1_000_000L)
-        // First content delivery after join differs from the room -> prompt, NOT a takeover broadcast.
+        // Deliberately starting another episode of the room's series moves the room.
         val output = engine.onLocalContentChanged(testContent(episode = 2), 1_000_100L)
-        assertNull(output.broadcast, "initial delivery must not take over the room")
-        assertEquals(9, output.contentPrompt?.episode)
+        assertEquals(WatchPartyStateReason.CONTENT_CHANGE, output.broadcast?.reason)
+        assertEquals(2, output.broadcast?.contentId?.episode)
+        assertNull(output.contentPrompt)
     }
 
     @Test

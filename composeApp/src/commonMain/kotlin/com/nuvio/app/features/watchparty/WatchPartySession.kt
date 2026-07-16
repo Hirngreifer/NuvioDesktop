@@ -30,6 +30,7 @@ sealed interface WatchPartyEvent {
     data class RemoteSeeked(val displayName: String, val positionMs: Long) : WatchPartyEvent
     data class BufferHold(val displayName: String) : WatchPartyEvent
     data class ContentPrompt(val contentId: WatchPartyContentId) : WatchPartyEvent
+    data class MoveRoomPrompt(val contentId: WatchPartyContentId) : WatchPartyEvent
 }
 
 /**
@@ -177,6 +178,16 @@ class WatchPartySession(
         scope.launch { dispatch(engine.onLocalContentChanged(contentId, nowMs())) }
     }
 
+    fun confirmRoomMove() {
+        scope.launch { dispatch(engine.confirmRoomMove(nowMs())) }
+    }
+
+    fun declineRoomMove() {
+        scope.launch { dispatch(engine.declineRoomMove()) }
+    }
+
+    fun isDeviatingByChoice(): Boolean = engine.deviatingByChoice
+
     private suspend fun handleRemoteState(state: WatchPartyRoomState) {
         val before = engine.lastKnownState
         dispatch(engine.onRemoteState(state, nowMs()))
@@ -246,6 +257,7 @@ class WatchPartySession(
             )
         }
         output.contentPrompt?.let { _events.emit(WatchPartyEvent.ContentPrompt(it)) }
+        output.moveRoomPrompt?.let { _events.emit(WatchPartyEvent.MoveRoomPrompt(it)) }
         _roomContent.value = engine.lastKnownState?.contentId
     }
 

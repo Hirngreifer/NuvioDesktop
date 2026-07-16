@@ -224,6 +224,11 @@ data class PlayerControlsState(
     val watchPartyPromptShowEpisodes: Boolean = false,
     val watchPartyPromptShowEpisodesLabel: String = "Show episodes",
     val watchPartyPromptDismissLabel: String = "Dismiss",
+    val watchPartyMovePromptText: String = "",
+    val watchPartyMovePromptConfirmLabel: String = "Move party",
+    val watchPartyMovePromptDeclineLabel: String = "Just for me",
+    val watchPartyCopyCodeLabel: String = "Copy room code",
+    val watchPartyCodeCopiedText: String = "Code copied",
 )
 
 data class PlayerControlWatchPartyParticipant(

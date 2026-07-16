@@ -128,7 +128,7 @@ class WatchPartySyncEngineContentChangeTest {
     private val MOVIE_B = WatchPartyContentId("tt2", "movie", null, null, "Film B")
 
     @Test
-    fun switchViaPlayerCloseBroadcastsContentChangeHold() {
+    fun switchViaPlayerCloseToDifferentTitlePromptsThenMovesOnConfirm() {
         val engine = WatchPartySyncEngine("me")
         engine.onLocalContentChanged(EP1, nowMs = 1_000L)
         engine.onRemoteState(roomState(content = EP1, isPlaying = true, positionMs = 10_000L, actorId = "other", seq = 5), nowMs = 1_000L)
@@ -136,10 +136,13 @@ class WatchPartySyncEngineContentChangeTest {
 
         // Player zu (unbind) …
         engine.onLocalContentChanged(null, nowMs = 3_000L)
-        // … und ein anderer Film startet: bewusster Wechsel → Raum zieht mit.
+        // … und ein anderer Titel startet: erst fragen, dann umziehen.
         val out = engine.onLocalContentChanged(MOVIE_B, nowMs = 4_000L)
+        assertNull(out.broadcast)
+        assertEquals(MOVIE_B, out.moveRoomPrompt)
 
-        val broadcast = assertNotNull(out.broadcast)
+        val confirmed = engine.confirmRoomMove(nowMs = 5_000L)
+        val broadcast = assertNotNull(confirmed.broadcast)
         assertEquals(WatchPartyStateReason.CONTENT_CHANGE, broadcast.reason)
         assertEquals(MOVIE_B, broadcast.contentId)
         assertFalse(broadcast.isPlaying)

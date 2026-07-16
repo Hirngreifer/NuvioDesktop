@@ -135,7 +135,7 @@ class WatchPartySessionTest {
     }
 
     @Test
-    fun joinerWithDifferentContentGetsPromptNotCommands() = runBlocking {
+    fun joinerStartingAnotherEpisodeMovesTheRoom() = runBlocking {
         var now = 1_000_000L
         val room = FakeWatchPartyRoom()
         val scopeA = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -152,14 +152,19 @@ class WatchPartySessionTest {
         sessionA.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 60_000L))
 
         sessionB.join("ABCD23", "Ben")
-        sessionB.onContentChanged(testContent(episode = 7))
-        sessionB.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 0L))
-
-        assertTrue(commandsB.isEmpty(), "content mismatch must not control the player")
         assertTrue(
             eventsB.filterIsInstance<WatchPartyEvent.ContentPrompt>()
                 .any { it.contentId.sameContentAs(testContent(episode = 2)) },
+            "menu join must surface what the room is watching",
         )
+        sessionB.onContentChanged(testContent(episode = 7))
+        sessionB.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 0L))
+
+        assertTrue(
+            WatchPartyPlayerCommand.Pause in commandsB,
+            "same-series start moves the room via a coordinated hold",
+        )
+        assertEquals(7, sessionA.latestRoomState()?.contentId?.episode)
         scopeA.cancel()
         scopeB.cancel()
     }

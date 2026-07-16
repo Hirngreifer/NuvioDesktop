@@ -408,6 +408,9 @@
     <string name="watch_party_screen_title">Watch Party</string>
     <string name="watch_party_lobby_waiting">Waiting for content — start something to kick things off for everyone.</string>
     <string name="watch_party_rejoin_last">Rejoin %1$s</string>
+    <string name="watch_party_rejoin_last_with_count">Rejoin %1$s · %2$d in room</string>
+    <string name="watch_party_copy_code">Copy room code</string>
+    <string name="watch_party_code_copied">Code copied</string>
     <string name="watch_party_now_watching">Watching: %1$s</string>
     <string name="watch_party_open_playback">Go to playback</string>
     <string name="watch_party_toast_joined">%1$s joined</string>
@@ -419,6 +422,9 @@
     <string name="watch_party_prompt_title">The room is now watching %1$s</string>
     <string name="watch_party_prompt_show_episodes">Show episodes</string>
     <string name="watch_party_prompt_dismiss">Dismiss</string>
+    <string name="watch_party_move_prompt_title">Move the party to %1$s?</string>
+    <string name="watch_party_move_prompt_confirm">Move party</string>
+    <string name="watch_party_move_prompt_decline">Just for me</string>
     <string name="watch_party_follow_failed">Could not open what the party is watching. Open it manually to rejoin the sync.</string>
     <string name="watch_party_banner_lobby">Watch party lobby — waiting for content</string>
     <string name="watch_party_banner_watching">Party is watching %1$s — tap to join</string>

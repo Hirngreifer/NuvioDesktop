@@ -33,8 +33,10 @@ internal fun routeWatchPartyFollow(
     roomContent: WatchPartyContentId?,
     boundContent: WatchPartyContentId?,
     playerDetached: Boolean,
+    deviatingByChoice: Boolean = false,
 ): WatchPartyFollowRoute = when {
     roomContent == null -> WatchPartyFollowRoute.NONE
+    deviatingByChoice -> WatchPartyFollowRoute.NONE
     boundContent != null && roomContent.sameContentAs(boundContent) -> WatchPartyFollowRoute.NONE
     boundContent != null &&
         boundContent.metaId == roomContent.metaId &&
@@ -135,6 +137,24 @@ object WatchPartyCoordinator {
         scope.launch { session.leave() }
     }
 
+    /**
+     * Occupancy check for the rejoin shortcut: peeks the last room invisibly and
+     * clears the stored code when the room turned out empty. Returns the
+     * participant count, or null when unknown (error/timeout → fail open, keep
+     * the shortcut).
+     */
+    suspend fun checkLastRoomOccupancy(): Int? {
+        val code = _lastRoomCode.value ?: return null
+        if (_session.value != null || !isConfigured) return null
+        val count = runCatching { peekWatchPartyParticipantCount(WatchPartySupabaseProvider.client, code) }
+            .onFailure { error -> log.w(error) { "Failed to peek watch party room occupancy" } }
+            .getOrNull() ?: return null
+        if (count == 0 && _session.value == null && _lastRoomCode.value == code) {
+            updateLastRoomCode(null)
+        }
+        return count
+    }
+
     /** Sets the in-memory value and persists it (save for a code, clear for null). */
     private fun updateLastRoomCode(code: String?) {
         _lastRoomCode.value = code
@@ -167,7 +187,7 @@ object WatchPartyCoordinator {
         val bound = if (playerBound) boundContent.value else null
         // playerDetached only meaningful when not bound; bound players are never "detached"
         val detached = !playerBound && playerDetached
-        when (routeWatchPartyFollow(content, bound, detached)) {
+        when (routeWatchPartyFollow(content, bound, detached, session.isDeviatingByChoice())) {
             WatchPartyFollowRoute.NONE -> Unit
             WatchPartyFollowRoute.IN_PLAYER ->
                 _followInPlayer.tryEmit(buildFollowRequest(content!!, session))

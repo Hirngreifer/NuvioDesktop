@@ -88,8 +88,21 @@ internal fun PlayerScreenRuntime.leaveWatchParty() {
     watchPartySessionState = WatchPartySessionState()
     watchPartyContentPrompt = null
     watchPartyDismissedPrompt = null
+    watchPartyMoveRoomPrompt = null
     watchPartyToast = null
     WatchPartyCoordinator.leave()
+}
+
+internal fun PlayerScreenRuntime.confirmWatchPartyRoomMove() {
+    watchPartyMoveRoomPrompt = null
+    watchPartySession?.setFollowing(true)
+    watchPartySession?.confirmRoomMove()
+}
+
+internal fun PlayerScreenRuntime.declineWatchPartyRoomMove() {
+    watchPartyMoveRoomPrompt = null
+    watchPartySession?.declineRoomMove()
+    watchPartySession?.setFollowing(false)
 }
 
 internal fun PlayerScreenRuntime.executeWatchPartyCommand(command: WatchPartyPlayerCommand) {
@@ -151,6 +164,10 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
                 watchPartyContentPrompt = event.contentId
             }
         }
+        is WatchPartyEvent.MoveRoomPrompt -> {
+            watchPartyMoveRoomPrompt = event.contentId
+            watchPartySession?.setFollowing(false)
+        }
     }
 }
 
@@ -194,6 +211,10 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
                 val prompt = watchPartyContentPrompt
                 if (prompt != null && contentId != null && prompt.sameContentAs(contentId)) {
                     watchPartyContentPrompt = null
+                }
+                val movePrompt = watchPartyMoveRoomPrompt
+                if (movePrompt != null && (contentId == null || !movePrompt.sameContentAs(contentId))) {
+                    watchPartyMoveRoomPrompt = null
                 }
             }
         }

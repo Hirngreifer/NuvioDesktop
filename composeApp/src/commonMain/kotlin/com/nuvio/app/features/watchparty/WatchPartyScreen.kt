@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Pause
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -37,13 +40,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
@@ -59,7 +66,10 @@ import nuvio.composeapp.generated.resources.watch_party_open_playback
 import nuvio.composeapp.generated.resources.watch_party_panel_title
 import nuvio.composeapp.generated.resources.watch_party_participants
 import nuvio.composeapp.generated.resources.watch_party_reconnecting
+import nuvio.composeapp.generated.resources.watch_party_code_copied
+import nuvio.composeapp.generated.resources.watch_party_copy_code
 import nuvio.composeapp.generated.resources.watch_party_rejoin_last
+import nuvio.composeapp.generated.resources.watch_party_rejoin_last_with_count
 import nuvio.composeapp.generated.resources.watch_party_room_code
 import nuvio.composeapp.generated.resources.watch_party_screen_title
 import nuvio.composeapp.generated.resources.watch_party_your_name
@@ -80,10 +90,18 @@ fun WatchPartyScreen(
     val lastRoomCode by WatchPartyCoordinator.lastRoomCode.collectAsStateWithLifecycle()
     var codeInput by rememberSaveable { mutableStateOf("") }
     var nameInput by rememberSaveable { mutableStateOf("") }
+    var lastRoomOccupancy by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(Unit) {
         if (nameInput.isBlank()) {
             nameInput = WatchPartyCoordinator.resolveDisplayName()
+        }
+    }
+
+    LaunchedEffect(lastRoomCode, sessionState.isActive) {
+        lastRoomOccupancy = null
+        if (lastRoomCode != null && !sessionState.isActive) {
+            lastRoomOccupancy = WatchPartyCoordinator.checkLastRoomOccupancy()
         }
     }
 
@@ -104,6 +122,7 @@ fun WatchPartyScreen(
                 nameInput = nameInput,
                 onNameInputChange = { nameInput = it },
                 lastRoomCode = lastRoomCode,
+                lastRoomOccupancy = lastRoomOccupancy,
                 isConfigured = WatchPartyCoordinator.isConfigured,
                 onCreate = { WatchPartyCoordinator.createRoom(displayName = nameInput.takeIf { it.isNotBlank() }) },
                 onJoin = { code -> WatchPartyCoordinator.joinRoom(code, displayName = nameInput.takeIf { it.isNotBlank() }) },
@@ -142,6 +161,7 @@ private fun WatchPartyJoinCreateSection(
     nameInput: String,
     onNameInputChange: (String) -> Unit,
     lastRoomCode: String?,
+    lastRoomOccupancy: Int?,
     isConfigured: Boolean,
     onCreate: () -> Unit,
     onJoin: (String) -> Unit,
@@ -217,7 +237,13 @@ private fun WatchPartyJoinCreateSection(
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
                     border = BorderStroke(1.dp, tokens.colors.borderDefault),
                 ) {
-                    Text(text = stringResource(Res.string.watch_party_rejoin_last, lastRoomCode))
+                    Text(
+                        text = if (lastRoomOccupancy != null && lastRoomOccupancy > 0) {
+                            stringResource(Res.string.watch_party_rejoin_last_with_count, lastRoomCode, lastRoomOccupancy)
+                        } else {
+                            stringResource(Res.string.watch_party_rejoin_last, lastRoomCode)
+                        },
+                    )
                 }
             }
         }
@@ -298,13 +324,7 @@ private fun WatchPartyLobbySection(
                     color = tokens.colors.textPrimary,
                 )
                 if (sessionState.roomCode != null) {
-                    Text(
-                        text = sessionState.roomCode,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = tokens.colors.accent,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = androidx.compose.ui.unit.TextUnit(4f, androidx.compose.ui.unit.TextUnitType.Sp),
-                    )
+                    WatchPartyRoomCodeRow(code = sessionState.roomCode)
                 }
                 if (sessionState.connection == WatchPartyConnectionState.CONNECTING) {
                     Text(
@@ -394,13 +414,7 @@ private fun WatchPartyActiveSection(
                     color = tokens.colors.textPrimary,
                 )
                 if (sessionState.roomCode != null) {
-                    Text(
-                        text = sessionState.roomCode,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = tokens.colors.accent,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = androidx.compose.ui.unit.TextUnit(4f, androidx.compose.ui.unit.TextUnitType.Sp),
-                    )
+                    WatchPartyRoomCodeRow(code = sessionState.roomCode)
                 }
                 if (sessionState.connection == WatchPartyConnectionState.CONNECTING) {
                     Text(
@@ -507,5 +521,45 @@ private fun WatchPartyParticipantRow(participant: WatchPartyParticipant) {
             style = MaterialTheme.typography.bodyMedium,
             color = tokens.colors.textPrimary,
         )
+    }
+}
+
+@Composable
+private fun WatchPartyRoomCodeRow(code: String) {
+    val tokens = MaterialTheme.nuvio
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_500)
+            copied = false
+        }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(NuvioTokens.Space.s4),
+    ) {
+        Text(
+            text = code,
+            style = MaterialTheme.typography.headlineSmall,
+            color = tokens.colors.accent,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = androidx.compose.ui.unit.TextUnit(4f, androidx.compose.ui.unit.TextUnitType.Sp),
+        )
+        IconButton(
+            onClick = {
+                clipboardManager.setText(AnnotatedString(code))
+                copied = true
+            },
+        ) {
+            Icon(
+                imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                contentDescription = stringResource(
+                    if (copied) Res.string.watch_party_code_copied else Res.string.watch_party_copy_code,
+                ),
+                modifier = Modifier.size(20.dp),
+                tint = if (copied) tokens.colors.accent else tokens.colors.textMuted,
+            )
+        }
     }
 }

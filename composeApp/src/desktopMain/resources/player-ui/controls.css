@@ -2389,11 +2389,22 @@ button.action:focus-visible {
   pointer-events: none;
 }
 
+.watch-party-code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .watch-party-room-code {
   font-size: 30px;
   font-weight: 700;
   letter-spacing: .14em;
   color: var(--theme-control-foreground);
+}
+
+.watch-party-copy-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .watch-party-hint {

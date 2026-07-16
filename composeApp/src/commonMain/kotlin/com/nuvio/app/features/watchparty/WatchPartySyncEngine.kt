@@ -10,6 +10,7 @@ data class WatchPartySyncConfig(
     val contentStartGraceMs: Long = 5_000L,
     val contentStartTimeoutMs: Long = 60_000L,
     val seekSettleTimeoutMs: Long = 15_000L,
+    val seekRetryIntervalMs: Long = 2_000L,
 )
 
 sealed interface WatchPartyPlayerCommand {
@@ -34,7 +35,48 @@ class WatchPartySyncEngine(
         val broadcast: WatchPartyRoomState? = null,
         val presenceStatus: WatchPartyParticipantStatus? = null,
         val contentPrompt: WatchPartyContentId? = null,
+        val moveRoomPrompt: WatchPartyContentId? = null,
     )
+
+    val deviatingByChoice: Boolean
+        get() {
+            val content = localContent ?: return false
+            return pendingRoomMove?.sameContentAs(content) == true ||
+                declinedRoomMove?.sameContentAs(content) == true
+        }
+
+    fun confirmRoomMove(nowMs: Long): Output {
+        val content = localContent ?: return Output()
+        val pending = pendingRoomMove ?: return Output()
+        if (!pending.sameContentAs(content)) {
+            pendingRoomMove = null
+            return Output()
+        }
+        pendingRoomMove = null
+        declinedRoomMove = null
+        declinedRoomMoveRoomContent = null
+        realignOnNextSnapshot = false
+        pendingPlayState = false
+        suppressUntilMs = nowMs + config.suppressWindowMs
+        return Output(
+            commands = listOf(WatchPartyPlayerCommand.Pause),
+            broadcast = buildBroadcast(
+                isPlaying = false,
+                positionMs = 0L,
+                nowMs = nowMs,
+                reason = WatchPartyStateReason.CONTENT_CHANGE,
+            ),
+            presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.PAUSED),
+        )
+    }
+
+    fun declineRoomMove(): Output {
+        val pending = pendingRoomMove ?: return Output()
+        pendingRoomMove = null
+        declinedRoomMove = pending
+        declinedRoomMoveRoomContent = lastKnownState?.contentId
+        return Output()
+    }
 
     var lastKnownState: WatchPartyRoomState? = null
         private set
@@ -51,6 +93,10 @@ class WatchPartySyncEngine(
     private var pendingSeekTargetMs: Long? = null
     private var pendingSeekIssuedAtMs: Long = 0L
     private var bufferingSinceMs: Long? = null
+    private var hasSeenReadySnapshot: Boolean = false
+    private var pendingRoomMove: WatchPartyContentId? = null
+    private var declinedRoomMove: WatchPartyContentId? = null
+    private var declinedRoomMoveRoomContent: WatchPartyContentId? = null
     private val observedClock = mutableMapOf<String, Long>()
     private var maxObservedSeq = 0L
     private var hasReceivedPresence: Boolean = false
@@ -86,8 +132,15 @@ class WatchPartySyncEngine(
         val state = lastKnownState ?: return Output()
         val content = localContent
         if (content == null || !state.contentId.sameContentAs(content)) {
+            val deviatingByChoice = content != null && (
+                pendingRoomMove?.sameContentAs(content) == true ||
+                    (
+                        declinedRoomMove?.sameContentAs(content) == true &&
+                            declinedRoomMoveRoomContent?.sameContentAs(state.contentId) == true
+                        )
+                )
             return Output(
-                contentPrompt = state.contentId,
+                contentPrompt = state.contentId.takeUnless { deviatingByChoice },
                 presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.SELECTING_SOURCE),
             )
         }
@@ -101,9 +154,13 @@ class WatchPartySyncEngine(
         }
         val expectedMs = state.expectedPositionMs(nowMs)
         if (abs(snapshot.positionMs - expectedMs) > config.driftToleranceMs) {
-            commands += WatchPartyPlayerCommand.SeekTo(expectedMs)
-            pendingSeekTargetMs = expectedMs
-            pendingSeekIssuedAtMs = nowMs
+            if (snapshot.isBuffering) {
+                realignOnNextSnapshot = true
+            } else {
+                commands += WatchPartyPlayerCommand.SeekTo(expectedMs)
+                pendingSeekTargetMs = expectedMs
+                pendingSeekIssuedAtMs = nowMs
+            }
         }
         if (commands.isNotEmpty()) {
             suppressUntilMs = nowMs + config.suppressWindowMs
@@ -160,6 +217,8 @@ class WatchPartySyncEngine(
         val content = localContent
         val contentMatches = known != null && content != null && known.contentId.sameContentAs(content)
 
+        if (!snapshot.isBuffering) hasSeenReadySnapshot = true
+
         val arrivedAtSeekTarget = pendingSeekTargetMs?.let { target ->
             abs(snapshot.positionMs - target) <= config.seekDetectionThresholdMs
         } == true
@@ -169,7 +228,7 @@ class WatchPartySyncEngine(
         var broadcast: WatchPartyRoomState? = null
         val commands = mutableListOf<WatchPartyPlayerCommand>()
 
-        if (realignOnNextSnapshot && contentMatches) {
+        if (realignOnNextSnapshot && contentMatches && !snapshot.isBuffering) {
             realignOnNextSnapshot = false
             lastSnapshot = snapshot
             lastSnapshotAtMs = nowMs
@@ -187,11 +246,36 @@ class WatchPartySyncEngine(
                 nowMs = nowMs,
                 reason = WatchPartyStateReason.USER,
             )
+        } else if (contentMatches && inFlightSeek && !snapshot.isBuffering) {
+            val flipped = previous != null && snapshot.isPlaying != previous.isPlaying && !previous.isBuffering
+            if (flipped) {
+                when {
+                    pendingPlayState == snapshot.isPlaying -> pendingPlayState = null
+                    nowMs < suppressUntilMs -> Unit
+                    else -> {
+                        broadcast = buildBroadcast(
+                            isPlaying = snapshot.isPlaying,
+                            positionMs = known!!.expectedPositionMs(nowMs),
+                            nowMs = nowMs,
+                            reason = WatchPartyStateReason.USER,
+                        )
+                        pendingSeekTargetMs = null
+                        realignOnNextSnapshot = true
+                    }
+                }
+            }
+            if (broadcast == null && nowMs - pendingSeekIssuedAtMs >= config.seekRetryIntervalMs) {
+                val expectedMs = known!!.expectedPositionMs(nowMs)
+                commands += WatchPartyPlayerCommand.SeekTo(expectedMs)
+                pendingSeekTargetMs = expectedMs
+                pendingSeekIssuedAtMs = nowMs
+                suppressUntilMs = nowMs + config.suppressWindowMs
+            }
         } else if (contentMatches && !inFlightSeek) {
             if (snapshot.isBuffering) {
                 if (bufferingSinceMs == null) bufferingSinceMs = nowMs
                 val bufferedLongEnough = nowMs - (bufferingSinceMs ?: nowMs) >= config.bufferDebounceMs
-                if (bufferedLongEnough && known!!.isPlaying) {
+                if (bufferedLongEnough && known!!.isPlaying && hasSeenReadySnapshot) {
                     broadcast = buildBroadcast(
                         isPlaying = false,
                         positionMs = snapshot.positionMs,
@@ -283,6 +367,7 @@ class WatchPartySyncEngine(
         if (!known.contentId.sameContentAs(content)) return Output()
         val snapshot = lastSnapshot ?: return Output()
         if (!snapshot.isBuffering) return Output()
+        if (!hasSeenReadySnapshot) return Output()
         if (seekInFlight(nowMs)) return Output()
         if (!known.isPlaying) return Output()
         val since = bufferingSinceMs ?: nowMs.also { bufferingSinceMs = it }
@@ -384,18 +469,40 @@ class WatchPartySyncEngine(
             lastSnapshot = null
             bufferingSinceMs = null
             realignOnNextSnapshot = true
+            hasSeenReadySnapshot = false
         }
         if (contentId == null) {
             return Output(presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.IDLE))
         }
         val known = lastKnownState
+        if (known?.contentId?.sameContentAs(contentId) == true) {
+            pendingRoomMove = null
+        }
         val deliberate = contentActuallyChanged ||
             switchedAcrossUnbind ||
+            firstContentIntoKnownRoom ||
             // Lobby start: the first content while already presence-synced in a
             // state-less room. (Room creation from the player sets content BEFORE
             // the first presence sync — session starts collectors before join.)
             (previous == null && hasReceivedPresence && known == null)
         if (deliberate && (known == null || !known.contentId.sameContentAs(contentId))) {
+            val sameTitleAsRoom = known != null &&
+                known.contentId.metaId == contentId.metaId &&
+                known.contentId.mediaType == contentId.mediaType
+            if (known != null && !sameTitleAsRoom) {
+                realignOnNextSnapshot = false
+                if (
+                    declinedRoomMove?.sameContentAs(contentId) == true &&
+                    declinedRoomMoveRoomContent?.sameContentAs(known.contentId) == true
+                ) {
+                    return Output(presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.SELECTING_SOURCE))
+                }
+                pendingRoomMove = contentId
+                return Output(
+                    moveRoomPrompt = contentId,
+                    presenceStatus = updatePresenceStatus(WatchPartyParticipantStatus.SELECTING_SOURCE),
+                )
+            }
             // Coordinated start: the room pauses at 0:00 until every non-idle
             // participant is ready, then auto-resumes (Task 2).
             realignOnNextSnapshot = false

@@ -32,4 +32,18 @@ class WatchPartyFollowRouterTest {
 
     @Test fun detachedIrrelevantWhenBound_differentMetaRoutesViaLaunch() =
         assertEquals(WatchPartyFollowRoute.VIA_LAUNCH, routeWatchPartyFollow(movie, ep1, playerDetached = true))
+
+    // Whoever declined the room move (or still has the prompt open) watches by
+    // choice: room content changes surface as a prompt, never as a forced launch.
+    @Test fun deviatingByChoiceRoutesNowhere() =
+        assertEquals(
+            WatchPartyFollowRoute.NONE,
+            routeWatchPartyFollow(movie, ep1, playerDetached = false, deviatingByChoice = true),
+        )
+
+    @Test fun deviatingByChoiceRoutesNowhereEvenInPlayer() =
+        assertEquals(
+            WatchPartyFollowRoute.NONE,
+            routeWatchPartyFollow(ep2, ep1, playerDetached = false, deviatingByChoice = true),
+        )
 }

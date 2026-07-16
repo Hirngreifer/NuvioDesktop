@@ -10,16 +10,43 @@ import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.realtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+
+/**
+ * Silent occupancy check: subscribes to the room channel WITHOUT tracking own
+ * presence (invisible), reads the initial presence sync, disconnects. Returns
+ * the participant count, or null on error/timeout (callers must fail open).
+ */
+suspend fun peekWatchPartyParticipantCount(
+    supabase: SupabaseClient,
+    roomCode: String,
+    timeoutMs: Long = 5_000L,
+): Int? = withTimeoutOrNull(timeoutMs) {
+    val ch = supabase.channel("watchparty:$roomCode") {}
+    try {
+        coroutineScope {
+            val firstSync = async { ch.presenceChangeFlow().first() }
+            ch.subscribe(blockUntilSubscribed = true)
+            firstSync.await().joins.size
+        }
+    } finally {
+        runCatching { ch.unsubscribe() }
+        runCatching { supabase.realtime.removeChannel(ch) }
+    }
+}
 
 /**
  * Supabase Realtime transport: broadcast event "state" on channel

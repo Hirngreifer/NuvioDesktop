@@ -392,6 +392,13 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
             isSeries,
         watchPartyPromptShowEpisodesLabel = stringResource(Res.string.watch_party_prompt_show_episodes),
         watchPartyPromptDismissLabel = stringResource(Res.string.watch_party_prompt_dismiss),
+        watchPartyMovePromptText = watchPartyMoveRoomPrompt?.let { prompt ->
+            stringResource(Res.string.watch_party_move_prompt_title, prompt.displayTitle)
+        }.orEmpty(),
+        watchPartyMovePromptConfirmLabel = stringResource(Res.string.watch_party_move_prompt_confirm),
+        watchPartyMovePromptDeclineLabel = stringResource(Res.string.watch_party_move_prompt_decline),
+        watchPartyCopyCodeLabel = stringResource(Res.string.watch_party_copy_code),
+        watchPartyCodeCopiedText = stringResource(Res.string.watch_party_code_copied),
     )
     val gestureCallbacks = rememberSurfaceGestureCallbacks()
 
@@ -754,6 +761,8 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
             watchPartyDismissedPrompt = watchPartyContentPrompt
             watchPartyContentPrompt = null
         }
+        "watchPartyMoveConfirm" -> confirmWatchPartyRoomMove()
+        "watchPartyMoveDecline" -> declineWatchPartyRoomMove()
         "cursorActivity" -> {
             if (!playerControlsLocked) {
                 controlsVisible = true

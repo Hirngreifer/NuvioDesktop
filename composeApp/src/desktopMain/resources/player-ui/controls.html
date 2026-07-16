@@ -100,6 +100,9 @@
     <symbol id="icon-person" viewBox="0 0 24 24">
       <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4Zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4Z"/>
     </symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24">
+      <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1Zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2Zm0 16H8V7h11v14Z"/>
+    </symbol>
   </svg>
 
   <div class="player" id="playerRoot" tabindex="-1">
@@ -453,7 +456,12 @@
             </div>
           </div>
           <div class="intro-form" id="watchPartyActiveView" hidden>
-            <div class="watch-party-room-code" id="watchPartyRoomCode"></div>
+            <div class="watch-party-code-row">
+              <div class="watch-party-room-code" id="watchPartyRoomCode"></div>
+              <button class="panel-button" id="watchPartyCopyCodeButton" type="button" aria-label="Copy room code">
+                <svg class="watch-party-copy-icon"><use href="#icon-copy"></use></svg>
+              </button>
+            </div>
             <div class="watch-party-hint" id="watchPartyNowWatching" hidden></div>
             <button class="panel-button primary" id="watchPartyJoinPlaybackButton" type="button" hidden>Go to playback</button>
             <div class="form-label" id="watchPartyParticipantsLabel">Participants</div>
@@ -469,6 +477,15 @@
           <div class="modal-actions">
             <button class="panel-button" id="watchPartyPromptDismissButton" type="button">Dismiss</button>
             <button class="panel-button primary" id="watchPartyPromptEpisodesButton" type="button" hidden>Show episodes</button>
+          </div>
+        </div>
+      </section>
+      <section class="modal-layer" id="watchPartyMoveModal" aria-label="Move watch party" hidden>
+        <div class="track-panel submit">
+          <div class="consent-body" id="watchPartyMoveText"></div>
+          <div class="modal-actions">
+            <button class="panel-button" id="watchPartyMoveDeclineButton" type="button">Just for me</button>
+            <button class="panel-button primary" id="watchPartyMoveConfirmButton" type="button">Move party</button>
           </div>
         </div>
       </section>

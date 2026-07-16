@@ -26,6 +26,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Pause
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -52,8 +55,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import com.nuvio.app.core.ui.NuvioTokens
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.watchparty.WatchPartyConnectionState
@@ -123,6 +129,12 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
             watchPartyDismissedPrompt = prompt
             watchPartyContentPrompt = null
         },
+    )
+
+    WatchPartyMoveRoomPromptOverlay(
+        prompt = watchPartyMoveRoomPrompt,
+        onConfirm = { confirmWatchPartyRoomMove() },
+        onDecline = { declineWatchPartyRoomMove() },
     )
 }
 
@@ -303,12 +315,7 @@ internal fun PlayerWatchPartyPanel(
                                 }
                             }
                             else -> {
-                                Text(
-                                    text = sessionState.roomCode.orEmpty(),
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = tokens.colors.textPrimary,
-                                )
+                                WatchPartyPanelRoomCodeRow(code = sessionState.roomCode.orEmpty())
                                 Spacer(modifier = Modifier.height(12.dp))
                                 if (joinPlaybackContent != null) {
                                     Text(
@@ -363,6 +370,45 @@ internal fun PlayerWatchPartyPanel(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun WatchPartyPanelRoomCodeRow(code: String) {
+    val tokens = MaterialTheme.nuvio
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_500)
+            copied = false
+        }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            text = code,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = tokens.colors.textPrimary,
+        )
+        IconButton(
+            onClick = {
+                clipboardManager.setText(AnnotatedString(code))
+                copied = true
+            },
+        ) {
+            Icon(
+                imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                contentDescription = stringResource(
+                    if (copied) Res.string.watch_party_code_copied else Res.string.watch_party_copy_code,
+                ),
+                modifier = Modifier.size(20.dp),
+                tint = if (copied) tokens.colors.accent else tokens.colors.textMuted,
+            )
         }
     }
 }
@@ -433,6 +479,47 @@ private fun WatchPartyToastOverlay(toast: WatchPartyToastState?) {
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchPartyMoveRoomPromptOverlay(
+    prompt: WatchPartyContentId?,
+    onConfirm: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    if (prompt == null) return
+    val tokens = MaterialTheme.nuvio
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxWidth(0.85f)
+                .clip(tokens.shapes.playerPanel)
+                .background(tokens.colors.surfaceSheet)
+                .border(tokens.borders.thin, tokens.colors.borderDefault, tokens.shapes.playerPanel),
+        ) {
+            Column(modifier = Modifier.padding(tokens.spacing.sheetPadding)) {
+                Text(
+                    text = stringResource(Res.string.watch_party_move_prompt_title, prompt.displayTitle),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.colors.textPrimary,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onConfirm) {
+                        Text(stringResource(Res.string.watch_party_move_prompt_confirm))
+                    }
+                    OutlinedButton(
+                        onClick = onDecline,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = tokens.colors.textPrimary),
+                        border = BorderStroke(1.dp, tokens.colors.borderDefault),
+                    ) {
+                        Text(stringResource(Res.string.watch_party_move_prompt_decline))
+                    }
+                }
             }
         }
     }
