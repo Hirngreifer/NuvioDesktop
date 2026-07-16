@@ -1,0 +1,148 @@
+# Manueller "richtiger" Release des Forks: baut den aktuellen Stand mit
+# eigenem Versionsnamen (…-hirngreifer) und veröffentlicht ein echtes
+# GitHub-Release (kein Pre-Release) mit sprechenden Dateinamen.
+#
+# Die MSI-ProductVersion leitet sich aus dem Versionsnamen ab (jpackage);
+# sie muss über der der bisherigen dev-Builds liegen (1.1.x), sonst
+# verweigert Windows die Installation als Downgrade — daher 1.2 aufwärts.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release-Version (z.B. 1.2 — muss als x.y über den dev-Builds 1.1.x liegen)"
+        required: true
+        default: "1.2"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  test-and-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Kein ref: alle Jobs bauen exakt github.sha (den Stand beim Dispatch).
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Provide empty local.properties
+        run: touch local.properties
+
+      - name: Desktop tests
+        run: ./gradlew :composeApp:desktopTest
+
+      - name: Package DEB
+        env:
+          NUVIO_DESKTOP_VERSION_NAME: ${{ inputs.version }}-hirngreifer
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
+          NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+        run: ./gradlew :composeApp:packageReleaseDeb
+
+      - name: Rename DEB artifact
+        run: |
+          mkdir -p dist
+          src=$(ls composeApp/build/compose/binaries/main-release/deb/*.deb | head -1)
+          cp "$src" "dist/Nuvio-Hirngreifer-${{ inputs.version }}-Linux-amd64.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Provide empty local.properties
+        shell: pwsh
+        run: New-Item -ItemType File -Path local.properties -Force | Out-Null
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory "$env:RUNNER_TEMP\nuget" -NonInteractive
+          $dir = Get-ChildItem "$env:RUNNER_TEMP\nuget" -Directory |
+            Where-Object Name -like 'Microsoft.Web.WebView2*' |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $dir) { throw "WebView2 NuGet package not found" }
+          Add-Content $env:GITHUB_ENV "NUVIO_WEBVIEW2_DIR=$($dir.FullName)"
+
+      - name: Package MSI
+        shell: pwsh
+        env:
+          NUVIO_DESKTOP_VERSION_NAME: ${{ inputs.version }}-hirngreifer
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
+          NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+        run: .\gradlew.bat :composeApp:packageReleaseMsi "-Pnuvio.webview2.dir=$env:NUVIO_WEBVIEW2_DIR"
+
+      - name: Rename MSI artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $src = Get-ChildItem composeApp/build/compose/release-msis/*.msi | Select-Object -First 1
+          if (-not $src) { throw "No MSI found" }
+          Copy-Item $src.FullName "dist/Nuvio-Hirngreifer-${{ inputs.version }}-Windows-x64.msi"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-msi
+          path: dist/*.msi
+          if-no-files-found: error
+
+  release:
+    needs: [test-and-deb, msi]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        run: |
+          gh release create "v${{ inputs.version }}-hirngreifer" \
+            --target "${{ github.sha }}" \
+            --title "Nuvio Hirngreifer Edition ${{ inputs.version }}" \
+            --notes "$(cat <<'NOTES'
+          Nuvio mit Watch Party — gemeinsam schauen, perfekt synchron.
+
+          - Watch-Party-Räume mit 6-stelligem Code (erstellen, beitreten, rejoinen)
+          - Play/Pause/Seek-Sync mit Puffer-Koordination und Drift-Korrektur
+          - Late-Join springt sofort an die laufende Stelle
+          - Lobby, Auto-Follow bei Episodenwechseln, Rückfrage bei Titelwechseln
+          - Party-UI im Player auf Windows, Linux und macOS
+
+          Windows: MSI installieren. Linux: sudo apt install ./Nuvio-Hirngreifer-*-Linux-amd64.deb
+          NOTES
+          )" \
+            artifacts/*
