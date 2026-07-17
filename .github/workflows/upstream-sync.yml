@@ -23,6 +23,18 @@ env:
   UPSTREAM_BRANCH: Dev
 
 jobs:
+  # Supabase pauses free projects after ~7 idle days; this daily gateway ping
+  # keeps the watch-party project awake. Separate job on purpose: a failing
+  # ping turns the run red (failure mail) without blocking the build jobs.
+  watchparty-keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping watch party Supabase
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 -o /dev/null \
+            "${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}/auth/v1/health" \
+            -H "apikey: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}"
+
   sync:
     runs-on: ubuntu-latest
     outputs:
