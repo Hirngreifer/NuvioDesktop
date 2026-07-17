@@ -46,10 +46,9 @@ class WatchPartySession(
     private val actorId: String,
     private val driftTickIntervalMs: Long = 10_000L,
     private val engineConfig: WatchPartySyncConfig = WatchPartySyncConfig(),
-    private val presenceMinIntervalMs: Long = 8_000L,
-    // 2 s keeps urgent sends at ≤15/30 s worst-case, well within Realtime's
-    // 30-calls/30-s per-client limit even when combined with normal-path sends.
-    private val presenceUrgentMinIntervalMs: Long = 2_000L,
+    private val presenceMinGapMs: Long = 3_000L,
+    private val presenceWindowMs: Long = 30_000L,
+    private val presenceMaxPerWindow: Int = 4,
 ) {
     private val log = Logger.withTag("WatchPartySession")
     private val engine = WatchPartySyncEngine(actorId, engineConfig)
@@ -72,9 +71,11 @@ class WatchPartySession(
     private var displayName: String = ""
     private var participantNames: Map<String, String> = emptyMap()
     private var previousParticipantIds: Set<String>? = null
-    // Realtime enforces a per-client presence rate limit (default 5 calls per
-    // 30 s window); exceeding it kills the channel. Coalesce rapid updates.
+    // Supabase Realtime kills the channel when a client exceeds its presence
+    // rate limit (measured on cloud: the 6th track inside the window closes the
+    // channel). Budget below stays under it, including the join's own track.
     private var lastPresenceSentAtMs: Long = Long.MIN_VALUE / 2
+    private val presenceSendTimesMs = ArrayDeque<Long>()
     private var pendingPresence: WatchPartyPresencePayload? = null
     private var presenceFlushJob: Job? = null
     private var bufferProbeJob: Job? = null
@@ -120,6 +121,7 @@ class WatchPartySession(
             code,
             WatchPartyPresencePayload(actorId, displayName, WatchPartyParticipantStatus.IDLE, null),
         )
+        recordPresenceSend(nowMs())
         _state.update { it.copy(isActive = true, roomCode = code) }
     }
 
@@ -131,6 +133,8 @@ class WatchPartySession(
         bufferProbeJob?.cancel()
         bufferProbeJob = null
         pendingPresence = null
+        presenceSendTimesMs.clear()
+        lastPresenceSentAtMs = Long.MIN_VALUE / 2
         isFollowing = false
         lastEngineStatus = null
         _roomContent.value = null
@@ -151,7 +155,7 @@ class WatchPartySession(
             // Re-announce the mapped status immediately so IDLE/SELECTING_SOURCE
             // flips reach the all-ready rule without waiting for the next event.
             val status = lastEngineStatus ?: return@launch
-            sendPresenceThrottled(buildPresencePayload(status), urgent = true)
+            sendPresenceThrottled(buildPresencePayload(status))
         }
     }
 
@@ -251,10 +255,7 @@ class WatchPartySession(
             val engineStatus = output.presenceStatus
                 ?: lastEngineStatus
                 ?: WatchPartyParticipantStatus.IDLE
-            sendPresenceThrottled(
-                buildPresencePayload(engineStatus),
-                urgent = output.presenceStatus != null,
-            )
+            sendPresenceThrottled(buildPresencePayload(engineStatus))
         }
         output.contentPrompt?.let { _events.emit(WatchPartyEvent.ContentPrompt(it)) }
         output.moveRoomPrompt?.let { _events.emit(WatchPartyEvent.MoveRoomPrompt(it)) }
@@ -274,37 +275,59 @@ class WatchPartySession(
         WatchPartyPresencePayload(actorId, displayName, mappedStatus(engineStatus), engine.lastKnownState)
 
     /**
-     * Sends at most one presence update per [presenceMinIntervalMs] (or
-     * [presenceUrgentMinIntervalMs] when [urgent] is true); updates inside the window
-     * are coalesced into a single trailing flush carrying the newest payload.
-     * Keeps us well below Realtime's per-client presence rate limit.
+     * Sends presence immediately while the rate budget allows it ([presenceMinGapMs]
+     * between sends, at most [presenceMaxPerWindow] sends — including the join's own
+     * track — per [presenceWindowMs]); updates beyond the budget are coalesced into
+     * a single trailing flush carrying the newest payload.
      */
-    private suspend fun sendPresenceThrottled(payload: WatchPartyPresencePayload, urgent: Boolean = false) {
+    private suspend fun sendPresenceThrottled(payload: WatchPartyPresencePayload) {
         val now = nowMs()
-        val elapsed = now - lastPresenceSentAtMs
-        val requiredIntervalMs = if (urgent) presenceUrgentMinIntervalMs else presenceMinIntervalMs
-        if (elapsed >= requiredIntervalMs) {
-            lastPresenceSentAtMs = now
+        if (canSendPresenceAt(now)) {
+            recordPresenceSend(now)
             pendingPresence = null
             presenceFlushJob?.cancel()
             presenceFlushJob = null
             trackPresence(payload)
-        } else {
-            pendingPresence = payload
-            val waitMs = requiredIntervalMs - elapsed
-            val existingFlush = presenceFlushJob
-            // An urgent flush may preempt a later normal flush.
-            if (existingFlush?.isActive != true || urgent) {
-                existingFlush?.cancel()
-                presenceFlushJob = scope.launch {
-                    delay(waitMs)
-                    val pending = pendingPresence ?: return@launch
-                    pendingPresence = null
-                    lastPresenceSentAtMs = nowMs()
-                    trackPresence(pending)
-                }
-            }
+            return
         }
+        pendingPresence = payload
+        if (presenceFlushJob?.isActive == true) return
+        val waitMs = nextPresenceSlotMs(now) - now
+        presenceFlushJob = scope.launch {
+            delay(waitMs.coerceAtLeast(0L))
+            val pending = pendingPresence ?: return@launch
+            pendingPresence = null
+            recordPresenceSend(nowMs())
+            trackPresence(pending)
+        }
+    }
+
+    private fun canSendPresenceAt(now: Long): Boolean {
+        prunePresenceWindow(now)
+        return now - lastPresenceSentAtMs >= presenceMinGapMs &&
+            presenceSendTimesMs.size < presenceMaxPerWindow
+    }
+
+    private fun nextPresenceSlotMs(now: Long): Long {
+        prunePresenceWindow(now)
+        val gapSlotMs = lastPresenceSentAtMs + presenceMinGapMs
+        val windowSlotMs = if (presenceSendTimesMs.size >= presenceMaxPerWindow) {
+            presenceSendTimesMs.first() + presenceWindowMs
+        } else {
+            Long.MIN_VALUE
+        }
+        return maxOf(gapSlotMs, windowSlotMs)
+    }
+
+    private fun prunePresenceWindow(now: Long) {
+        while (presenceSendTimesMs.isNotEmpty() && now - presenceSendTimesMs.first() >= presenceWindowMs) {
+            presenceSendTimesMs.removeFirst()
+        }
+    }
+
+    private fun recordPresenceSend(now: Long) {
+        lastPresenceSentAtMs = now
+        presenceSendTimesMs.addLast(now)
     }
 
     private suspend fun trackPresence(payload: WatchPartyPresencePayload) {

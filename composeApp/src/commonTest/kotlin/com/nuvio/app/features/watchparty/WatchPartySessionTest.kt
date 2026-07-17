@@ -23,11 +23,12 @@ private val EP2 = WatchPartyContentId("tt1", "series", 1, 2, "Ep 2")
 
 class WatchPartySessionTest {
 
-    /** Creates a session + its fake client. [presenceMinIntervalMs] and
-     *  [presenceUrgentMinIntervalMs] can be overridden to exercise throttle paths. */
+    /** Creates a session + its fake client. Presence rate limiting is disabled by
+     *  default so behaviour tests observe every update; budget tests override. */
     private fun createSession(
-        presenceMinIntervalMs: Long = 8_000L,
-        presenceUrgentMinIntervalMs: Long = 1_000L,
+        presenceMinGapMs: Long = 0L,
+        presenceWindowMs: Long = 0L,
+        presenceMaxPerWindow: Int = 4,
     ): Pair<WatchPartySession, FakeWatchPartyClient> {
         val room = FakeWatchPartyRoom()
         val client = room.client()
@@ -38,8 +39,9 @@ class WatchPartySessionTest {
             nowMs = { 1_000_000L },
             actorId = "actor-a",
             driftTickIntervalMs = 3_600_000L,
-            presenceMinIntervalMs = presenceMinIntervalMs,
-            presenceUrgentMinIntervalMs = presenceUrgentMinIntervalMs,
+            presenceMinGapMs = presenceMinGapMs,
+            presenceWindowMs = presenceWindowMs,
+            presenceMaxPerWindow = presenceMaxPerWindow,
         )
         return session to client
     }
@@ -64,6 +66,8 @@ class WatchPartySessionTest {
             nowMs = { now },
             actorId = "actor-b",
             driftTickIntervalMs = 3_600_000L,
+            presenceMinGapMs = 0L,
+            presenceWindowMs = 0L,
         )
         val commandsA = mutableListOf<WatchPartyPlayerCommand>()
         val commandsB = mutableListOf<WatchPartyPlayerCommand>()
@@ -140,8 +144,8 @@ class WatchPartySessionTest {
         val room = FakeWatchPartyRoom()
         val scopeA = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val scopeB = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val sessionA = WatchPartySession(room.client(), scopeA, { now }, "actor-a", driftTickIntervalMs = 3_600_000L)
-        val sessionB = WatchPartySession(room.client(), scopeB, { now }, "actor-b", driftTickIntervalMs = 3_600_000L)
+        val sessionA = WatchPartySession(room.client(), scopeA, { now }, "actor-a", driftTickIntervalMs = 3_600_000L, presenceMinGapMs = 0L, presenceWindowMs = 0L)
+        val sessionB = WatchPartySession(room.client(), scopeB, { now }, "actor-b", driftTickIntervalMs = 3_600_000L, presenceMinGapMs = 0L, presenceWindowMs = 0L)
         val commandsB = mutableListOf<WatchPartyPlayerCommand>()
         val eventsB = mutableListOf<WatchPartyEvent>()
         scopeB.launch { sessionB.commands.collect { commandsB += it } }
@@ -226,7 +230,7 @@ class WatchPartySessionTest {
         var now = 1_000_000L
         val room = FakeWatchPartyRoom()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        val session = WatchPartySession(room.client(), scope, { now }, "actor-a", driftTickIntervalMs = 3_600_000L)
+        val session = WatchPartySession(room.client(), scope, { now }, "actor-a", driftTickIntervalMs = 3_600_000L, presenceMinGapMs = 0L, presenceWindowMs = 0L)
         session.join("ABCD23", "Anna")
         assertFailsWith<IllegalStateException> {
             session.join("ABCD23", "Anna")
@@ -239,14 +243,6 @@ class WatchPartySessionTest {
     fun presenceUpdatesAreThrottledWithTrailingFlush() = runBlocking {
         // Realtime limits presence updates per client; the session must coalesce
         // rapid broadcast-triggering updates into one deferred trailing flush.
-        //
-        // Design: presenceUrgentMinIntervalMs (40 ms) < presenceMinIntervalMs (50 ms)
-        // so the urgent path fires first during setup, giving a clean throttle-start
-        // moment.  After that, rapid user-seek broadcasts keep the status at PLAYING
-        // (output.presenceStatus == null) so the NORMAL 50 ms throttle path applies —
-        // and the urgent path cannot mask the coalescing behaviour.
-        // The urgent path itself is exercised separately by
-        // statusChangesBypassThePresenceThrottleWindow.
         var now = 1_000_000L
         val room = FakeWatchPartyRoom()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -257,30 +253,29 @@ class WatchPartySessionTest {
             nowMs = { now },
             actorId = "actor-a",
             driftTickIntervalMs = 3_600_000L,
-            presenceMinIntervalMs = 50L,
-            presenceUrgentMinIntervalMs = 40L, // < presenceMinIntervalMs; urgent fires first
+            presenceMinGapMs = 50L,
+            presenceWindowMs = 0L,
         )
         session.join("ABCD23", "Anna")
-        // Content change → coordinated-start → status PAUSED, first presence sent immediately
-        // (never-sent timer, so threshold doesn't matter).
+        // Content change → coordinated-start → status PAUSED; the join's own track
+        // just consumed the gap, so this update is deferred (coalesced).
         session.onContentChanged(testContent())
         // Paused snapshot: no status change, no broadcast → no additional presence update.
         session.onPlaybackSnapshot(testSnapshot(isPlaying = false, positionMs = 0L))
 
         // Advance clock past the suppress window (500 ms, set by the coordinated-start)
-        // and past both throttle intervals so the next snapshot fires immediately.
+        // and past the min gap so the next snapshot fires immediately.
         now += 600L
-        // PAUSED→PLAYING status change: urgent path, elapsed 600 ms > 40 ms → fires immediately.
-        // This resets lastPresenceSentAtMs to `now`, opening a fresh 50 ms throttle window.
+        // PAUSED→PLAYING status change: elapsed 600 ms > 50 ms gap → fires immediately,
+        // cancels the pending flush and opens a fresh 50 ms gap at `now`.
         session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 3_000L))
         val afterFirst = client.presenceUpdateCount
-        assertTrue(afterFirst >= 1, "initial playing presence must be sent immediately")
+        assertTrue(afterFirst >= 1, "playing presence must be sent immediately once the gap is open")
 
-        // Rapid user-seek broadcasts inside the 50 ms window: positions jump by 3 s each
+        // Rapid user-seek broadcasts inside the 50 ms gap: positions jump by 3 s each
         // (> seekDetectionThresholdMs 2 s) so the engine detects a user seek and broadcasts.
         // nowMs is fixed so expectedLocalMs = previous position; the jump always exceeds the
-        // threshold.  Status stays PLAYING throughout → presenceStatus == null → NORMAL
-        // throttle path.  suppressUntilMs expired at now−100 so suppression is not active.
+        // threshold.  suppressUntilMs expired at now−100 so suppression is not active.
         session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 6_000L))
         session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 9_000L))
         session.onPlaybackSnapshot(testSnapshot(isPlaying = true, positionMs = 12_000L))
@@ -315,7 +310,7 @@ class WatchPartySessionTest {
 
     @Test
     fun followingFlagRestoresSelectingSource() = runBlocking {
-        val (session, client) = createSession(presenceUrgentMinIntervalMs = 0L)
+        val (session, client) = createSession()
         session.join("ABCDEF", "Anna")
         // Deliver a remote state so lastKnownState = EP2 (different from testContent).
         // With Unconfined, emitState() is processed synchronously before the next line.
@@ -330,29 +325,11 @@ class WatchPartySessionTest {
         session.onContentChanged(testContent())
 
         // Now setFollowing(true): isFollowing flips, mappedStatus(SELECTING_SOURCE) = SELECTING_SOURCE,
-        // and the urgent presence fires immediately (presenceUrgentMinIntervalMs = 0).
+        // and the presence fires immediately (rate limiting disabled in createSession).
         session.setFollowing(true)
         // With Unconfined the internal launch in setFollowing() runs synchronously.
         assertEquals(WatchPartyParticipantStatus.SELECTING_SOURCE, client.lastPresencePayload?.status,
             "follow active + content mismatch → SELECTING_SOURCE must be visible for all-ready rule")
-    }
-
-    @Test
-    fun statusChangesBypassThePresenceThrottleWindow() = runBlocking {
-        // presenceMinIntervalMs very large, presenceUrgentMinIntervalMs = 0:
-        // a status-change (urgent) goes out immediately even though the 8s window is closed.
-        val (session, client) = createSession(
-            presenceMinIntervalMs = 60_000L,
-            presenceUrgentMinIntervalMs = 0L,
-        )
-        session.join("ABCDEF", "Anna")
-        // Trigger lastEngineStatus to be set (non-urgent path on first event after join).
-        session.onContentChanged(null)
-        val countAfterInit = client.presenceUpdateCount
-
-        session.setFollowing(true)   // Status-change IDLE → SELECTING_SOURCE, urgent path
-        assertTrue(client.presenceUpdateCount > countAfterInit,
-            "urgent status-change must bypass the 60s throttle window")
     }
 
     /**
@@ -369,7 +346,7 @@ class WatchPartySessionTest {
      */
     @Test
     fun contentClearedBeforeUnfollowResultsInIdle() = runBlocking {
-        val (session, client) = createSession(presenceUrgentMinIntervalMs = 0L)
+        val (session, client) = createSession()
         session.join("ABCDEF", "Anna")
         // Bring the session to PLAYING state (simulates active player).
         session.onContentChanged(testContent())
@@ -405,6 +382,8 @@ class WatchPartySessionTest {
             nowMs = { now },
             actorId = "actor-a",
             driftTickIntervalMs = 3_600_000L,
+            presenceMinGapMs = 0L,
+            presenceWindowMs = 0L,
         )
         val commands = mutableListOf<WatchPartyPlayerCommand>()
         scope.launch { session.commands.collect { commands += it } }
