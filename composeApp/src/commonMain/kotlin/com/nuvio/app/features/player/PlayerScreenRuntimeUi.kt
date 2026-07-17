@@ -1317,7 +1317,6 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
         },
         onAudioModalDismissed = { showAudioModal = false },
         showSubtitleModal = showSubtitleModal,
-        activeSubtitleTab = activeSubtitleTab,
         subtitleTracks = subtitleTracks,
         selectedSubtitleIndex = selectedSubtitleIndex,
         addonSubtitles = visibleAddonSubtitles,
@@ -1327,7 +1326,6 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
         subtitleDelayMs = subtitleDelayMs,
         selectedAddonSubtitle = selectedAddonSubtitle,
         subtitleAutoSyncState = subtitleAutoSyncState,
-        onSubtitleTabSelected = { activeSubtitleTab = it },
         onBuiltInSubtitleTrackSelected = { index ->
             val wasCustom = useCustomSubtitles
             selectedSubtitleIndex = index
@@ -1363,6 +1361,8 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
         onVideoSettingsModalDismissed = { showVideoSettingsModal = false },
         showSourcesPanel = showSourcesPanel,
         sourceStreamsState = sourceStreamsState,
+        contentTitle = title,
+        activeEpisodeTitle = activeEpisodeTitle,
         activeSourceUrl = activeSourceUrl,
         activeStreamTitle = activeStreamTitle,
         onSourceFilterSelected = PlayerStreamsRepository::selectSourceFilter,
