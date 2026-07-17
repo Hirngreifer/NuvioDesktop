@@ -26,12 +26,12 @@ jobs:
   test-and-deb:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Kein ref: alle Jobs bauen exakt github.sha (den Stand beim Dispatch).
           lfs: true
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -58,7 +58,7 @@ jobs:
           src=$(ls composeApp/build/compose/binaries/main-release/deb/*.deb | head -1)
           cp "$src" "dist/Nuvio-Hirngreifer-${{ inputs.version }}-Linux-amd64.deb"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nuvio-deb
           path: dist/*.deb
@@ -67,11 +67,11 @@ jobs:
   msi:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: true
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -109,7 +109,7 @@ jobs:
           if (-not $src) { throw "No MSI found" }
           Copy-Item $src.FullName "dist/Nuvio-Hirngreifer-${{ inputs.version }}-Windows-x64.msi"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nuvio-msi
           path: dist/*.msi
@@ -121,9 +121,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
