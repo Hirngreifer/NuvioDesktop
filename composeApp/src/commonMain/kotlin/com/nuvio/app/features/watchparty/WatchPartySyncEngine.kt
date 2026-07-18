@@ -57,6 +57,7 @@ class WatchPartySyncEngine(
         declinedRoomMoveRoomContent = null
         realignOnNextSnapshot = false
         pendingPlayState = false
+        pendingPlayStateExpiresAtMs = nowMs + config.suppressWindowMs
         suppressUntilMs = nowMs + config.suppressWindowMs
         return Output(
             commands = listOf(WatchPartyPlayerCommand.Pause),
@@ -90,6 +91,11 @@ class WatchPartySyncEngine(
     private var lastSnapshotAtMs: Long = 0L
     private var suppressUntilMs: Long = 0L
     private var pendingPlayState: Boolean? = null
+    // When pendingPlayState was set by a transient coordination step (content-change
+    // lobby-start, confirmRoomMove) rather than by an explicit remote command, we
+    // give it a finite TTL so it cannot silently absorb a genuine user action that
+    // arrives after the suppress window expires.  Long.MAX_VALUE = no expiry (default).
+    private var pendingPlayStateExpiresAtMs: Long = Long.MAX_VALUE
     private var pendingSeekTargetMs: Long? = null
     private var pendingSeekIssuedAtMs: Long = 0L
     private var bufferingSinceMs: Long? = null
@@ -151,6 +157,7 @@ class WatchPartySyncEngine(
         if (state.isPlaying != snapshot.isPlaying) {
             commands += if (state.isPlaying) WatchPartyPlayerCommand.Play else WatchPartyPlayerCommand.Pause
             pendingPlayState = state.isPlaying
+            pendingPlayStateExpiresAtMs = Long.MAX_VALUE // remote commands have no TTL
         }
         val expectedMs = state.expectedPositionMs(nowMs)
         if (abs(snapshot.positionMs - expectedMs) > config.driftToleranceMs) {
@@ -297,6 +304,7 @@ class WatchPartySyncEngine(
                     )
                     commands += WatchPartyPlayerCommand.Play
                     pendingPlayState = true
+                    pendingPlayStateExpiresAtMs = Long.MAX_VALUE
                 }
             }
 
@@ -305,6 +313,14 @@ class WatchPartySyncEngine(
 
                 val flipped = snapshot.isPlaying != previous.isPlaying
                 if (flipped && !snapshot.isBuffering && !previous.isBuffering) {
+                    // A pendingPlayState set by a transient coordination step (content-change
+                    // lobby-start, confirmRoomMove) expires after suppressWindowMs.  A
+                    // pendingPlayState set by an explicit remote command (onRemoteState) carries
+                    // Long.MAX_VALUE and therefore never expires here.
+                    if (nowMs >= pendingPlayStateExpiresAtMs) {
+                        pendingPlayState = null
+                        pendingPlayStateExpiresAtMs = Long.MAX_VALUE
+                    }
                     when {
                         pendingPlayState == snapshot.isPlaying -> pendingPlayState = null
                         nowMs < suppressUntilMs -> Unit
@@ -507,6 +523,7 @@ class WatchPartySyncEngine(
             // participant is ready, then auto-resumes (Task 2).
             realignOnNextSnapshot = false
             pendingPlayState = false
+            pendingPlayStateExpiresAtMs = nowMs + config.suppressWindowMs
             suppressUntilMs = nowMs + config.suppressWindowMs
             return Output(
                 commands = listOf(WatchPartyPlayerCommand.Pause),
@@ -568,6 +585,7 @@ class WatchPartySyncEngine(
         if (base.broadcast != null) return base
         val resume = maybeContentStartResume(nowMs) ?: return base
         pendingPlayState = true
+        pendingPlayStateExpiresAtMs = Long.MAX_VALUE
         suppressUntilMs = nowMs + config.suppressWindowMs
         return base.copy(
             commands = base.commands + WatchPartyPlayerCommand.Play,

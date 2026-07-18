@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
+import kotlin.concurrent.Volatile
 import kotlin.math.abs
 
 data class WatchPartySessionState(
@@ -49,6 +51,7 @@ class WatchPartySession(
     private val presenceMinGapMs: Long = 3_000L,
     private val presenceWindowMs: Long = 30_000L,
     private val presenceMaxPerWindow: Int = 4,
+    private val lifecyclePauseWindowMs: Long = 2_000L,
 ) {
     private val log = Logger.withTag("WatchPartySession")
     private val engine = WatchPartySyncEngine(actorId, engineConfig)
@@ -85,6 +88,14 @@ class WatchPartySession(
     // Last status emitted by the engine (null before first engine output).
     private var lastEngineStatus: WatchPartyParticipantStatus? = null
 
+    // Away mode: set synchronously from the player's lifecycle observer. Snapshot
+    // delivery is always queued on [scope], so this mark is visible to the queued
+    // pause flip regardless of lifecycle observer ordering.
+    @Volatile
+    private var appBackgroundedAtMs: Long = Long.MIN_VALUE
+    private var lifecycleSuspended = false
+    private var lastForwardedIsPlaying: Boolean? = null
+
     suspend fun create(displayName: String): String {
         val code = WatchPartyRoomCodes.generate()
         join(code, displayName)
@@ -113,7 +124,7 @@ class WatchPartySession(
         collectJobs += scope.launch {
             while (true) {
                 delay(driftTickIntervalMs)
-                dispatch(engine.onDriftTick(nowMs()))
+                if (!lifecycleSuspended) dispatch(engine.onDriftTick(nowMs()))
             }
         }
 
@@ -159,27 +170,64 @@ class WatchPartySession(
         }
     }
 
-    fun onPlaybackSnapshot(snapshot: WatchPartyPlaybackSnapshot) {
+    /** Synchronous mark from the player's lifecycle observer (ON_STOP). */
+    fun onAppBackgrounded() {
+        appBackgroundedAtMs = nowMs()
+    }
+
+    /** Clears away mode and realigns the local player with the room (ON_START). */
+    fun onAppForegrounded() {
+        appBackgroundedAtMs = Long.MIN_VALUE
         scope.launch {
-            dispatch(engine.onSnapshot(snapshot, nowMs()))
-            if (snapshot.isBuffering) {
-                if (bufferProbeJob?.isActive != true) {
-                    bufferProbeJob = scope.launch {
-                        while (true) {
-                            delay(engineConfig.bufferDebounceMs + 50L)
-                            dispatch(engine.onBufferProbe(nowMs()))
-                        }
+            if (!lifecycleSuspended) return@launch
+            lifecycleSuspended = false
+            dispatch(engine.applyKnownState(nowMs()))
+            sendPresenceThrottled(
+                buildPresencePayload(lastEngineStatus ?: WatchPartyParticipantStatus.IDLE),
+            )
+        }
+    }
+
+    suspend fun onPlaybackSnapshot(snapshot: WatchPartyPlaybackSnapshot) {
+        if (lifecycleSuspended) return
+        val wasPlaying = lastForwardedIsPlaying
+        lastForwardedIsPlaying = snapshot.isPlaying
+        val backgroundedAt = appBackgroundedAtMs
+        val isLifecyclePause = backgroundedAt != Long.MIN_VALUE &&
+            wasPlaying == true &&
+            !snapshot.isPlaying &&
+            nowMs() - backgroundedAt <= lifecyclePauseWindowMs
+        if (isLifecyclePause) {
+            // The OS paused us, not the user: freeze instead of pausing the room.
+            lifecycleSuspended = true
+            bufferProbeJob?.cancel()
+            bufferProbeJob = null
+            sendPresenceThrottled(buildPresencePayload(WatchPartyParticipantStatus.IDLE))
+            return
+        }
+        dispatch(engine.onSnapshot(snapshot, nowMs()))
+        yield() // allow pending flow-collector continuations to run (test-observable)
+        if (snapshot.isBuffering) {
+            if (bufferProbeJob?.isActive != true) {
+                bufferProbeJob = scope.launch {
+                    while (true) {
+                        delay(engineConfig.bufferDebounceMs + 50L)
+                        dispatch(engine.onBufferProbe(nowMs()))
                     }
                 }
-            } else {
-                bufferProbeJob?.cancel()
-                bufferProbeJob = null
             }
+        } else {
+            bufferProbeJob?.cancel()
+            bufferProbeJob = null
         }
     }
 
     fun onContentChanged(contentId: WatchPartyContentId?) {
-        scope.launch { dispatch(engine.onLocalContentChanged(contentId, nowMs())) }
+        // Compute the engine output synchronously so that localContent is set
+        // before the very next onPlaybackSnapshot call (which may arrive immediately
+        // from the same thread in tests and in production via snapshotFlow).
+        val output = engine.onLocalContentChanged(contentId, nowMs())
+        scope.launch { dispatch(output) }
     }
 
     fun confirmRoomMove() {
@@ -238,6 +286,9 @@ class WatchPartySession(
     }
 
     private suspend fun dispatch(output: WatchPartySyncEngine.Output) {
+        // Away: keep the engine's room model fresh (state intake happened in the
+        // caller), but let no commands, broadcasts or presence out.
+        if (lifecycleSuspended) return
         output.commands.forEach { _commands.emit(it) }
         output.broadcast?.let { state ->
             runCatching { client.broadcastState(state) }

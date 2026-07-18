@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.getString
 import kotlin.random.Random
@@ -84,6 +87,29 @@ object WatchPartyCoordinator {
 
     val isConfigured: Boolean get() = WatchPartySupabaseProvider.isConfigured
 
+    init {
+        // Party membership is bound to the profile identity: switching profiles
+        // auto-leaves the room (no auto-rejoin — the new profile joins on purpose)
+        // and reloads the profile-scoped last room code for the rejoin shortcut.
+        // NOTE: selectProfile() updates activeProfileIndex BEFORE emitting state, so
+        // by the time this collector runs, ProfileScopedKey already resolves to the
+        // TARGET profile. We must NOT call leave() here — its updateLastRoomCode(null)
+        // would clear the new profile's persisted rejoin code. We tear down the
+        // session only, leaving all profile-scoped persistence untouched.
+        // mapNotNull guards against transient null emissions that would otherwise
+        // fire for a non-switch and corrupt the firstNonNull drop(1) semantics.
+        scope.launch {
+            ProfileRepository.state
+                .mapNotNull { it.activeProfile?.profileIndex }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    if (_session.value != null) leaveSessionOnly()
+                    _lastRoomCode.value = WatchPartyPreferencesStorage.loadLastRoomCode()
+                }
+        }
+    }
+
     fun createRoom(displayName: String? = null) = startSession(displayName) { session, name ->
         val code = session.create(name)
         // create() returns the code directly — more reliable than reading state.roomCode afterwards
@@ -131,8 +157,18 @@ object WatchPartyCoordinator {
     }
 
     fun leave() {
-        val session = _session.value ?: return
         updateLastRoomCode(null)
+        leaveSessionOnly()
+    }
+
+    /**
+     * Tears down the active session without touching any profile-scoped persistence.
+     * Used on profile switch: by that point ProfileScopedKey already resolves to the
+     * new profile, so calling updateLastRoomCode(null) here would clear the wrong
+     * profile's rejoin code.
+     */
+    private fun leaveSessionOnly() {
+        val session = _session.value ?: return
         resetSession()
         scope.launch { session.leave() }
     }
