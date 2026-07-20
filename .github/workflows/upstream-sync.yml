@@ -45,6 +45,10 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # GITHUB_TOKEN may never push .github/workflows changes (GitHub App
+          # restriction), so upstream merges touching workflow files need the
+          # deploy key.
+          ssh-key: ${{ secrets.SYNC_PUSH_DEPLOY_KEY }}
 
       - name: Merge upstream into main
         id: merge
@@ -174,6 +178,9 @@ jobs:
         with:
           ref: ${{ needs.sync.outputs.merge_sha }}
           fetch-depth: 0
+          # Same restriction as in the sync job: pushing the merge to main
+          # includes workflow-file changes.
+          ssh-key: ${{ secrets.SYNC_PUSH_DEPLOY_KEY }}
 
       - uses: actions/download-artifact@v8
         with:
