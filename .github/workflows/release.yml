@@ -26,10 +26,10 @@ jobs:
   test-and-deb:
     runs-on: ubuntu-latest
     steps:
+      # Kein ref: alle Jobs bauen exakt github.sha (den Stand beim Dispatch).
       - uses: actions/checkout@v7
-        with:
-          # Kein ref: alle Jobs bauen exakt github.sha (den Stand beim Dispatch).
-          lfs: true
+
+      - uses: ./.github/actions/restore-lfs
 
       - uses: actions/setup-java@v5
         with:
@@ -68,8 +68,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          lfs: true
+
+      - uses: ./.github/actions/restore-lfs
 
       - uses: actions/setup-java@v5
         with:

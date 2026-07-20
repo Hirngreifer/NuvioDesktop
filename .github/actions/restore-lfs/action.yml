@@ -1,0 +1,35 @@
+# Fork LFS traffic counts against the upstream repo network's budget, which
+# is capped at 1 GiB/month — daily builds exhausted it on 2026-07-20. The CI
+# therefore restores LFS content from the ci-lfs-objects release asset
+# (release downloads are unmetered) instead of checking out with lfs: true.
+name: Restore LFS binaries
+description: >
+  Fills .git/lfs from the ci-lfs-objects release asset and checks the content
+  out offline. Falls back to git lfs pull only for objects missing from the
+  asset, and fails if any pointer file is left afterwards.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        pointers() { git lfs ls-files | awk '$2 == "-"'; }
+        gh release download ci-lfs-objects -R "$GITHUB_REPOSITORY" \
+          -p lfs-objects.tar.gz -O lfs-objects.tar.gz
+        mkdir -p .git/lfs
+        tar -xzf lfs-objects.tar.gz -C .git/lfs
+        rm lfs-objects.tar.gz
+        git lfs checkout || true
+        if [ -n "$(pointers)" ]; then
+          echo "ci-lfs-objects asset is missing objects for:"
+          pointers
+          echo "Falling back to git lfs pull (uses the shared LFS budget)."
+          git lfs pull
+        fi
+        if [ -n "$(pointers)" ]; then
+          echo "::error::LFS content incomplete — refresh the ci-lfs-objects release asset (see its release notes)."
+          pointers
+          exit 1
+        fi

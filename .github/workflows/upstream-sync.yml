@@ -86,10 +86,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.sync.outputs.merge_sha }}
-          # Player binaries (libmpv-2.dll, macOS dylibs) are Git-LFS objects;
-          # without lfs the bundles ship 134-byte pointer files and playback
-          # dies with "Unable to load libmpv-2.dll".
-          lfs: true
+
+      # Player binaries (libmpv-2.dll, macOS dylibs) are Git-LFS objects;
+      # without real content the bundles ship 134-byte pointer files and
+      # playback dies with "Unable to load libmpv-2.dll".
+      - uses: ./.github/actions/restore-lfs
 
       - uses: actions/setup-java@v5
         with:
@@ -127,9 +128,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.sync.outputs.merge_sha }}
-          # Same LFS requirement as test-and-deb: the MSI must contain the
-          # real libmpv-2.dll, not its LFS pointer.
-          lfs: true
+
+      # Same LFS requirement as test-and-deb: the MSI must contain the
+      # real libmpv-2.dll, not its LFS pointer.
+      - uses: ./.github/actions/restore-lfs
 
       - uses: actions/setup-java@v5
         with:
