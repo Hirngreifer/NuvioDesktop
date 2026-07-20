@@ -348,8 +348,14 @@ internal class NativePlayerController(
         val current = handle
         handle = 0L
         lastSentControlsStructureKey = null
-        if (current != 0L) {
-            runCatching { NativePlayerBridge.dispose(current) }
+        if (current == 0L) return
+        // Native shutdown blocks: it SendMessage()s the player's own UI thread and then joins it.
+        // That UI thread owns child windows of the AWT host, so tearing them down needs the EDT to
+        // keep pumping messages. Disposing on the EDT is therefore a circular wait that deadlocks
+        // the whole app (black, completely unresponsive window). Tear down off the EDT instead.
+        Thread({ runCatching { NativePlayerBridge.dispose(current) } }, "nuvio-player-dispose").apply {
+            isDaemon = true
+            start()
         }
     }
 
