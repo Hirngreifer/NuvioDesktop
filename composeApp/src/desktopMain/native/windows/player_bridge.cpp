@@ -60,6 +60,12 @@ namespace {
 HMODULE gModule = nullptr;
 constexpr UINT WM_NUVIO_TASK = WM_APP + 0x4E50;
 constexpr UINT_PTR NUVIO_TIMER_ID = 0x4E50;
+
+// Caps on waiting for the player's own UI thread during teardown. Exceeding these means that
+// thread is wedged; shutdown gives up rather than blocking the caller forever.
+constexpr UINT kUiTaskTimeoutMs = 2000;
+constexpr UINT kShutdownJoinTimeoutMs = 3000;
+
 const wchar_t *kMessageWindowClass = L"NuvioPlayerBridgeMessageWindow";
 const wchar_t *kContainerWindowClass = L"NuvioPlayerBridgeContainerWindow";
 constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
@@ -811,9 +817,41 @@ public:
         }
     }
 
+    // Waits a bounded time for a thread to finish, then gives up and detaches it. Shutdown must
+    // always complete: a thread that never returns must not strand the player's windows alive.
+    static void joinOrDetach(std::thread &thread) {
+        if (!thread.joinable()) return;
+        auto finished = std::make_shared<std::atomic_bool>(false);
+        std::thread waiter([&thread, finished]() {
+            thread.join();
+            finished->store(true);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kShutdownJoinTimeoutMs);
+        while (!finished->load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (finished->load()) {
+            waiter.join();
+        } else {
+            waiter.detach();
+        }
+    }
+
     void shutdown() {
         if (shuttingDown.exchange(true)) {
             return;
+        }
+
+        // Hide the player's window immediately, asynchronously, before anything below can block.
+        // If the UI thread has stopped pumping, the steps after this can stall and the window is
+        // then never destroyed, leaving a zombie child sitting over the AWT host that swallows
+        // every mouse and key event while video keeps playing. SWP_ASYNCWINDOWPOS posts rather
+        // than sends, so it cannot block on the stalled thread.
+        if (containerHwnd && IsWindow(containerHwnd)) {
+            SetWindowPos(
+                containerHwnd, nullptr, 0, 0, 0, 0,
+                SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS
+            );
         }
 
         sendUiTask([self = shared_from_this()]() {
@@ -828,9 +866,8 @@ public:
                 mpvApi().wakeup(mpv);
             }
         }
-        if (eventThread.joinable()) {
-            eventThread.join();
-        }
+        // Bounded: if a thread will not finish we detach rather than block dispose forever.
+        joinOrDetach(eventThread);
         {
             std::lock_guard<std::mutex> lock(mpvMutex);
             if (mpv) {
@@ -838,8 +875,8 @@ public:
                 mpv = nullptr;
             }
         }
-        if (uiThread.joinable() && GetCurrentThreadId() != uiThreadId) {
-            uiThread.join();
+        if (GetCurrentThreadId() != uiThreadId) {
+            joinOrDetach(uiThread);
         }
 
         if (eventSink) {
@@ -1283,10 +1320,18 @@ private:
                 doneCv->notify_one();
             });
         }
-        SendMessageW(messageHwnd, WM_NUVIO_TASK, 0, 0);
+        // Both of these were unbounded, so a UI thread that had stopped pumping (already quit, or
+        // stuck inside WebView2 teardown) blocked the caller forever. During shutdown that left the
+        // player's windows alive on top of the AWT host, swallowing all input while video kept
+        // playing. Bound both: a stalled UI thread now costs a short delay, not a permanent hang.
+        DWORD_PTR sendResult = 0;
+        SendMessageTimeoutW(
+            messageHwnd, WM_NUVIO_TASK, 0, 0,
+            SMTO_ABORTIFHUNG | SMTO_NORMAL, kUiTaskTimeoutMs, &sendResult
+        );
 
         std::unique_lock<std::mutex> waitLock(*doneMutex);
-        doneCv->wait(waitLock, [&]() { return *done; });
+        doneCv->wait_for(waitLock, std::chrono::milliseconds(kUiTaskTimeoutMs), [&]() { return *done; });
     }
 
     void startWebView(const std::string &controlsUrl) {
