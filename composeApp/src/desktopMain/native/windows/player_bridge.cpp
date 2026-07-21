@@ -77,6 +77,18 @@ struct BorderlessFullscreenState {
 std::mutex gBorderlessFullscreenMutex;
 std::unordered_map<HWND, BorderlessFullscreenState> gBorderlessFullscreenStates;
 
+// Remembered so the dark chrome can be restored after leaving borderless fullscreen:
+// re-adding WS_CAPTION otherwise flashes a default white title bar.
+struct DwmChromeColors {
+    bool darkMode = false;
+    COLORREF caption = 0;
+    COLORREF border = 0;
+    COLORREF text = 0;
+};
+
+std::mutex gDwmChromeMutex;
+std::unordered_map<HWND, DwmChromeColors> gDwmChromeColors;
+
 struct DisplaySleepInhibitRequest {
     std::mutex mutex;
     std::condition_variable condition;
@@ -267,6 +279,23 @@ void applyDwmWindowChrome(HWND hwnd, bool darkMode, COLORREF captionColor, COLOR
     setDwmWindowAttribute(hwnd, kDwmwaCaptionColor, &captionColor, sizeof(captionColor));
     setDwmWindowAttribute(hwnd, kDwmwaBorderColor, &borderColor, sizeof(borderColor));
     setDwmWindowAttribute(hwnd, kDwmwaTextColor, &textColor, sizeof(textColor));
+
+    {
+        std::lock_guard<std::mutex> lock(gDwmChromeMutex);
+        gDwmChromeColors[hwnd] = DwmChromeColors{darkMode, captionColor, borderColor, textColor};
+    }
+}
+
+// Re-apply the previously stored dark chrome for a window (used after leaving fullscreen).
+void reapplyDwmWindowChrome(HWND hwnd) {
+    DwmChromeColors colors;
+    {
+        std::lock_guard<std::mutex> lock(gDwmChromeMutex);
+        auto it = gDwmChromeColors.find(hwnd);
+        if (it == gDwmChromeColors.end()) return;
+        colors = it->second;
+    }
+    applyDwmWindowChrome(hwnd, colors.darkMode, colors.caption, colors.border, colors.text);
 }
 
 void setBorderlessFullscreen(HWND hwnd, bool fullscreen, int x, int y, int width, int height) {
@@ -290,6 +319,12 @@ void setBorderlessFullscreen(HWND hwnd, bool fullscreen, int x, int y, int width
             ShowWindow(hwnd, SW_RESTORE);
         }
 
+        // Every step below (frame change, then the inset nudge) would otherwise repaint the window
+        // while Compose is still laid out at the old framed size, and those intermediate frames are
+        // what shows as a flash on the way into fullscreen. Suppress painting for the whole
+        // transition and draw exactly once at the end.
+        SendMessageW(hwnd, WM_SETREDRAW, FALSE, 0);
+
         LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         style &= ~(LONG_PTR)(WS_CAPTION | WS_THICKFRAME);
@@ -304,8 +339,25 @@ void setBorderlessFullscreen(HWND hwnd, bool fullscreen, int x, int y, int width
             fullscreenRect.top,
             fullscreenRect.right - fullscreenRect.left,
             fullscreenRect.bottom - fullscreenRect.top,
-            SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_NOACTIVATE
+            SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOREDRAW
         );
+
+        // Removing the caption/frame changes the client insets but NOT the outer window rect when
+        // the window was previously maximized (both are the full monitor). AWT only recomputes a
+        // top-level window's insets on an actual size change, so without one it keeps laying Compose
+        // out at the old, inset (framed) client size, leaving an unpainted strip on the right and
+        // bottom (the "white border"). Nudge the size by 1px to force AWT to recompute insets to
+        // zero and re-lay-out its children to fill the borderless client.
+        const int fsWidth = fullscreenRect.right - fullscreenRect.left;
+        const int fsHeight = fullscreenRect.bottom - fullscreenRect.top;
+        SetWindowPos(hwnd, nullptr, 0, 0, fsWidth, fsHeight - 1,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW);
+        SetWindowPos(hwnd, nullptr, 0, 0, fsWidth, fsHeight,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOREDRAW);
+
+        SendMessageW(hwnd, WM_SETREDRAW, TRUE, 0);
+        reapplyDwmWindowChrome(hwnd);
+        RedrawWindow(hwnd, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         return;
     }
 
@@ -333,6 +385,11 @@ void setBorderlessFullscreen(HWND hwnd, bool fullscreen, int x, int y, int width
         0,
         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE
     );
+
+    // Re-adding the caption re-exposes a default (white) title bar; restore the dark chrome and
+    // force a non-client redraw before the placement change so it never flashes through.
+    reapplyDwmWindowChrome(hwnd);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW);
 
     state.placement.length = sizeof(WINDOWPLACEMENT);
     const bool restoreMaximized = state.placement.showCmd == SW_SHOWMAXIMIZED;
@@ -2258,13 +2315,21 @@ Java_com_nuvio_app_features_player_desktop_NativePlayerBridge_applyWindowChrome(
     jint borderColorRgb,
     jint textColorRgb
 ) {
+    HWND hwnd = (HWND)(intptr_t)windowHwnd;
     applyDwmWindowChrome(
-        (HWND)(intptr_t)windowHwnd,
+        hwnd,
         darkMode == JNI_TRUE,
         rgbIntToColorRef(captionColorRgb),
         rgbIntToColorRef(borderColorRgb),
         rgbIntToColorRef(textColorRgb)
     );
+
+    // The window's default class brush is white, so any region Windows erases before Skia
+    // repaints it flashes white. Erase to black instead; against the near-black UI it is
+    // invisible even if a repaint lags.
+    if (hwnd && IsWindow(hwnd)) {
+        SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, (LONG_PTR)GetStockObject(BLACK_BRUSH));
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
