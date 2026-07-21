@@ -34,6 +34,12 @@ data class AddonSubtitle(
     val isSelected: Boolean = false,
 )
 
+internal enum class SubtitleTab {
+    BuiltIn,
+    Addons,
+    Style,
+}
+
 enum class AddonSubtitleStartupMode {
     FAST_STARTUP,
     PREFERRED_ONLY,

@@ -219,7 +219,7 @@ private fun readResponseBodyLimited(body: ResponseBody?, maxBytes: Int): String 
     if (body == null) return ""
     val charset = body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
     val readResult = body.byteStream().use { stream ->
-        readAtMostBytes(stream, maxBytes)
+        readAtMostBytes(stream, maxBytes.coerceAtLeast(0))
     }
     val decoded = runCatching {
         String(readResult.bytes, charset)
