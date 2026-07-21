@@ -18,7 +18,6 @@ internal actual object ThemeSettingsStorage {
     private const val desktopNavigationLayoutKey = "desktop_navigation_layout"
     private const val navBarStyleKey = "nav_bar_style"
     private const val selectedAppLanguageKey = "selected_app_language"
-    private const val navBarStyleKey = "nav_bar_style"
     private val profileScopedSyncKeys = listOf(
         selectedThemeKey,
         amoledEnabledKey,
@@ -73,13 +72,6 @@ internal actual object ThemeSettingsStorage {
 
     actual fun applySelectedAppLanguage(languageCode: String) {
         Locale.setDefault(Locale.forLanguageTag(languageCode))
-    }
-
-    actual fun loadNavBarStyle(): String? =
-        store.getString(ProfileScopedKey.of(navBarStyleKey))
-
-    actual fun saveNavBarStyle(styleKey: String) {
-        store.putString(ProfileScopedKey.of(navBarStyleKey), styleKey)
     }
 
     actual fun exportToSyncPayload(): JsonObject = buildJsonObject {
