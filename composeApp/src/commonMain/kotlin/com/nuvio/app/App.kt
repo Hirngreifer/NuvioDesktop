@@ -87,6 +87,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.LocalNavAnimatedContentScope
 import androidx.navigation3.ui.NavDisplay
 import androidx.savedstate.serialization.SavedStateConfiguration
@@ -844,13 +845,17 @@ private fun MainAppContent(
     onSwitchProfile: () -> Unit = {},
 ) {
         val navBackStack = rememberNavBackStack(navigationSavedStateConfiguration, initialRoute)
+        val routeDisposalDecorator = remember {
+            RouteDisposalNavEntryDecorator<NavKey> { key ->
+                if (key is AppRoute) disposeRoute(key)
+            }
+        }
         val navController = remember(navBackStack, onNavigate, onGoBack, onReplace) {
             NuvioNavigator(
                 backStack = navBackStack,
                 onExternalNavigate = onNavigate,
                 onExternalBack = onGoBack,
                 onExternalReplace = onReplace,
-                onRouteRemoved = ::disposeRoute,
             )
         }
         val appUpdaterController = rememberAppUpdaterController()
@@ -1909,8 +1914,12 @@ private fun MainAppContent(
                     backStack = navBackStack,
                     modifier = Modifier.fillMaxSize(),
                     onBack = { navController.popBackStack() },
+                    entryDecorators = listOf(
+                        rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+                        routeDisposalDecorator,
+                    ),
                     sharedTransitionScope = this@SharedTransitionLayout,
-                    entryProvider = entryProvider {
+                    entryProvider = entryProvider<NavKey> {
                 entry<TabsRoute> {
                     PlatformBackHandler(
                         enabled = true,
@@ -3366,6 +3375,13 @@ private fun MainAppContent(
                         },
                     )
                 }
+                    }.let { provider ->
+                        { key ->
+                            routeDisposalDecorator.register(
+                                key = key,
+                                entry = provider(key),
+                            )
+                        }
                     },
                 )
                 }
