@@ -603,6 +603,7 @@ if (isMacHost && isMacosDmgBuildRequested && macosPlayerBridgeArch != macosHostJ
 }
 val macosPlayerBridgeOutput = layout.buildDirectory.file("native/macos/$macosPlayerBridgeArch/libplayer_bridge.dylib")
 val macosPlayerRuntimeOutput = layout.buildDirectory.dir("native/macos-runtime/$macosPlayerBridgeArch")
+val macosPlayerAppResourcesRoot = layout.buildDirectory.dir("generated/macos-player-app-resources")
 val macosDmgArchName = macosPlayerBridgeArch
 val isMacosDmgNotarizationRequested = requestedGradleTasks.any { taskName ->
     taskName == "notarizedmg" || taskName == "notarizereleasedmg"
@@ -916,23 +917,17 @@ val prepareMacosPlayerRuntime = tasks.register<Sync>("prepareMacosPlayerRuntime"
     into(macosPlayerRuntimeOutput)
 }
 
-val generateMacosPlayerRuntimeIndex = tasks.register<GenerateNativeRuntimeIndexTask>("generateMacosPlayerRuntimeIndex") {
+val prepareMacosPlayerAppResources = tasks.register<Sync>("prepareMacosPlayerAppResources") {
     enabled = isMacHost
-    dependsOn(prepareMacosPlayerRuntime)
-    runtimeDir.set(macosPlayerRuntimeOutput)
-    indexFile.set(macosPlayerRuntimeOutput.map { it.file("runtime-files.txt") })
+    dependsOn(buildMacosPlayerBridge, prepareMacosPlayerRuntime)
+    from(macosPlayerBridgeOutput)
+    from(macosPlayerRuntimeOutput) {
+        include("*.dylib")
+    }
+    into(macosPlayerAppResourcesRoot.map { it.dir("macos/native/macos") })
 }
 
 tasks.withType<Jar>().configureEach {
-    if (isMacHost && name == "desktopJar") {
-        dependsOn(buildMacosPlayerBridge, prepareMacosPlayerRuntime, generateMacosPlayerRuntimeIndex)
-        from(macosPlayerBridgeOutput) {
-            into("native/macos")
-        }
-        from(macosPlayerRuntimeOutput) {
-            into("native/macos")
-        }
-    }
     if (isWindowsHost && name == "desktopJar") {
         dependsOn(buildWindowsPlayerBridge, prepareWindowsPlayerRuntime, generateWindowsPlayerRuntimeIndex)
         from(windowsPlayerBridgeOutput) {
@@ -941,6 +936,12 @@ tasks.withType<Jar>().configureEach {
         from(windowsPlayerRuntimeOutput) {
             into("native/windows")
         }
+    }
+}
+
+tasks.matching { it.name == "prepareAppResources" }.configureEach {
+    if (isMacHost) {
+        dependsOn(prepareMacosPlayerAppResources)
     }
 }
 
@@ -1174,6 +1175,9 @@ compose.desktop {
             packageName = "Nuvio"
             packageVersion = desktopReleasePackageVersion
             vendor = "Nuvio Media"
+            if (isMacHost) {
+                appResourcesRootDir.set(macosPlayerAppResourcesRoot)
+            }
             modules(
                 "java.instrument",
                 "java.management",

@@ -130,6 +130,11 @@ internal object NativePlayerBridge {
 
         val libraryName = nativeLibraryName(platform)
         val platformDir = nativeDirectoryName(platform)
+        findPackagedApplicationLibrary(platformDir, libraryName)?.let { packagedLibrary ->
+            loadNativeRuntimeDependencies(platform, packagedLibrary.parentFile)
+            System.load(packagedLibrary.absolutePath)
+            return
+        }
         findLocalBuildLibrary(platformDir, libraryName)?.let { localLibrary ->
             copyLocalRuntimeResources(platformDir, localLibrary.parentFile)
             loadNativeRuntimeDependencies(platform, localLibrary.parentFile)
@@ -150,6 +155,14 @@ internal object NativePlayerBridge {
         }
         loadNativeRuntimeDependencies(platform, dir)
         System.load(file.absolutePath)
+    }
+
+    private fun findPackagedApplicationLibrary(platformDir: String, libraryName: String): File? {
+        val resourcesDir = System.getProperty("compose.application.resources.dir")
+            ?.takeIf(String::isNotBlank)
+            ?.let(::File)
+            ?: return null
+        return resourcesDir.resolve("native/$platformDir/$libraryName").takeIf(File::isFile)
     }
 
     private fun loadNativeRuntimeDependencies(platform: DesktopHostOs, directory: File) {
