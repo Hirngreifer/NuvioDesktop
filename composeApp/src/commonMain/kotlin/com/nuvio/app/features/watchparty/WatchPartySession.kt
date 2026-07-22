@@ -24,6 +24,18 @@ data class WatchPartySessionState(
     val participants: List<WatchPartyParticipant> = emptyList(),
 )
 
+/**
+ * Follow-relevant facts the session publishes on [WatchPartySession.followFacts]:
+ * what the room watches, where its playback is anchored, and whether the local
+ * player deviates from the room on purpose. Consumers derive follow decisions
+ * from these facts alone; the session exposes no engine internals.
+ */
+data class WatchPartyFollowFacts(
+    val contentId: WatchPartyContentId,
+    val anchor: WatchPartyPositionAnchor,
+    val deviatingByChoice: Boolean,
+)
+
 sealed interface WatchPartyEvent {
     data class ParticipantJoined(val displayName: String) : WatchPartyEvent
     data class ParticipantLeft(val displayName: String) : WatchPartyEvent
@@ -65,10 +77,8 @@ class WatchPartySession(
     private val _events = MutableSharedFlow<WatchPartyEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<WatchPartyEvent> = _events.asSharedFlow()
 
-    private val _roomContent = MutableStateFlow<WatchPartyContentId?>(null)
-    val roomContent: StateFlow<WatchPartyContentId?> = _roomContent.asStateFlow()
-
-    fun latestRoomState(): WatchPartyRoomState? = engine.lastKnownState
+    private val _followFacts = MutableStateFlow<WatchPartyFollowFacts?>(null)
+    val followFacts: StateFlow<WatchPartyFollowFacts?> = _followFacts.asStateFlow()
 
     private val collectJobs = mutableListOf<Job>()
     private var displayName: String = ""
@@ -148,7 +158,7 @@ class WatchPartySession(
         lastPresenceSentAtMs = Long.MIN_VALUE / 2
         isFollowing = false
         lastEngineStatus = null
-        _roomContent.value = null
+        _followFacts.value = null
         runCatching { client.leave() }
             .onFailure { error -> log.w(error) { "Failed to leave watch party cleanly" } }
         previousParticipantIds = null
@@ -238,8 +248,6 @@ class WatchPartySession(
         scope.launch { dispatch(engine.declineRoomMove()) }
     }
 
-    fun isDeviatingByChoice(): Boolean = engine.deviatingByChoice
-
     private suspend fun handleRemoteState(state: WatchPartyRoomState) {
         val before = engine.lastKnownState
         dispatch(engine.onRemoteState(state, nowMs()))
@@ -310,7 +318,13 @@ class WatchPartySession(
         }
         output.contentPrompt?.let { _events.emit(WatchPartyEvent.ContentPrompt(it)) }
         output.moveRoomPrompt?.let { _events.emit(WatchPartyEvent.MoveRoomPrompt(it)) }
-        _roomContent.value = engine.lastKnownState?.contentId
+        _followFacts.value = engine.lastKnownState?.let { state ->
+            WatchPartyFollowFacts(
+                contentId = state.contentId,
+                anchor = state.positionAnchor(),
+                deviatingByChoice = engine.deviatingByChoice,
+            )
+        }
     }
 
     // Maps SELECTING_SOURCE → IDLE when not following (user is in the party but

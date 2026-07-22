@@ -168,7 +168,7 @@ class WatchPartySessionTest {
             WatchPartyPlayerCommand.Pause in commandsB,
             "same-series start moves the room via a coordinated hold",
         )
-        assertEquals(7, sessionA.latestRoomState()?.contentId?.episode)
+        assertEquals(7, sessionA.followFacts.value?.contentId?.episode)
         scopeA.cancel()
         scopeB.cancel()
     }
@@ -400,7 +400,7 @@ class WatchPartySessionTest {
 
         // --- Lobby join: room has no content, presence only.
         session.join("ABCD23", "Anna")
-        assertNull(session.roomContent.value, "lobby join must not produce room content")
+        assertNull(session.followFacts.value, "lobby join must not produce room content")
         assertEquals(2, session.state.value.participants.size)
 
         // --- First content started from the lobby → coordinated-start hold broadcast.
@@ -441,23 +441,84 @@ class WatchPartySessionTest {
     }
 
     @Test
-    fun roomContentFlowTracksLatestState() = runBlocking {
+    fun roomContentPublishesFactsOnContentChange() = runBlocking {
+        val (session, client) = createSession()
+        session.join("ABCDEF", "Anna")
+        assertNull(session.followFacts.value, "no facts before the first room state")
+
+        client.emitState(
+            roomState(content = EP1, isPlaying = true, positionMs = 10_000L,
+                actorId = "other", seq = 3L, atWallClockMs = 1_000_000L),
+        )
+        // Unconfined: collect runs synchronously, so roomContent is updated already.
+        assertEquals(EP1, session.followFacts.value?.contentId,
+            "facts must carry the room's content identity")
+
+        client.emitState(
+            roomState(content = EP2, isPlaying = true, positionMs = 60_000L,
+                actorId = "other", seq = 4L, reason = WatchPartyStateReason.CONTENT_CHANGE,
+                atWallClockMs = 990_000L),
+        )
+        val facts = assertNotNull(session.followFacts.value)
+        assertEquals(EP2, facts.contentId, "facts must follow a room content change")
+        assertEquals(70_000L, facts.anchor.expectedPositionMs(1_000_000L),
+            "anchor must yield the room-current position at any later time")
+        assertFalse(facts.deviatingByChoice)
+    }
+
+    @Test
+    fun roomContentAnchorTracksPositionJump() = runBlocking {
         val (session, client) = createSession()
         session.join("ABCDEF", "Anna")
 
-        val state = roomState(
-            content = EP2,
-            isPlaying = false,
-            positionMs = 0L,
-            actorId = "other",
-            seq = 3L,
-            reason = WatchPartyStateReason.CONTENT_CHANGE,
+        client.emitState(
+            roomState(content = EP2, isPlaying = true, positionMs = 60_000L,
+                actorId = "other", seq = 3L, atWallClockMs = 995_000L),
         )
-        client.emitState(state)
-        // Unconfined: collect runs synchronously, so roomContent is updated already.
-        assertEquals(EP2, session.roomContent.value,
-            "roomContent must reflect the latest incoming room state's contentId")
-        assertEquals(3L, session.latestRoomState()?.seq,
-            "latestRoomState() must return the engine's lastKnownState")
+        client.emitState(
+            roomState(content = EP2, isPlaying = true, positionMs = 300_000L,
+                actorId = "other", seq = 4L, atWallClockMs = 1_000_000L),
+        )
+        val playing = assertNotNull(session.followFacts.value)
+        assertEquals(300_000L, playing.anchor.expectedPositionMs(1_000_000L),
+            "anchor must track a position jump")
+        assertEquals(302_000L, playing.anchor.expectedPositionMs(1_002_000L),
+            "a playing anchor must extrapolate with wall-clock time")
+
+        client.emitState(
+            roomState(content = EP2, isPlaying = false, positionMs = 120_000L,
+                actorId = "other", seq = 5L, atWallClockMs = 1_000_000L),
+        )
+        val paused = assertNotNull(session.followFacts.value)
+        assertEquals(120_000L, paused.anchor.expectedPositionMs(1_030_000L),
+            "a paused anchor must freeze the position")
+    }
+
+    @Test
+    fun roomContentFactsCarryDeliberateDeviation() = runBlocking {
+        val (session, client) = createSession()
+        session.join("ABCDEF", "Anna")
+
+        client.emitState(
+            roomState(content = EP2, isPlaying = true, positionMs = 60_000L,
+                actorId = "other", seq = 3L),
+        )
+        assertEquals(false, session.followFacts.value?.deviatingByChoice,
+            "merely watching along is not a deliberate deviation")
+
+        // Starting a different title while the room plays EP2 opens the move-room
+        // prompt — from that moment the local player deviates by choice.
+        val otherTitle = WatchPartyContentId("tt9", "movie", null, null, "Other Movie")
+        session.onContentChanged(otherTitle)
+        assertEquals(true, session.followFacts.value?.deviatingByChoice,
+            "an open move-room prompt means deviating by choice")
+
+        session.declineRoomMove()
+        assertEquals(true, session.followFacts.value?.deviatingByChoice,
+            "declining the move keeps the deviation deliberate")
+
+        session.onContentChanged(EP2)
+        assertEquals(false, session.followFacts.value?.deviatingByChoice,
+            "returning to the room content ends the deviation")
     }
 }

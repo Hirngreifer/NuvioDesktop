@@ -76,6 +76,7 @@ object WatchPartyCoordinator {
     private val boundContent = MutableStateFlow<WatchPartyContentId?>(null)
     private var playerBound = false
     private var playerDetached = false
+    private var latestRoomFacts: WatchPartyFollowFacts? = null
     // Exposed so the banner can stay hidden while a follow-launch has the
     // stream picker open — the user is already on their way to the room content.
     private val _followLaunchInProgress = MutableStateFlow(false)
@@ -144,7 +145,7 @@ object WatchPartyCoordinator {
         )
         _session.value = session
         collectJobs += scope.launch { session.state.collect { _sessionState.value = it } }
-        collectJobs += scope.launch { session.roomContent.collect { onRoomContentChanged(it) } }
+        collectJobs += scope.launch { session.followFacts.collect { onRoomFactsChanged(it) } }
         scope.launch {
             val resolvedName = displayName?.takeIf { it.isNotBlank() } ?: resolveDisplayName()
             runCatching { start(session, resolvedName) }
@@ -207,49 +208,50 @@ object WatchPartyCoordinator {
         _session.value = null
         _sessionState.value = WatchPartySessionState()
         _roomContent.value = null
+        latestRoomFacts = null
         boundContent.value = null
         playerBound = false
         playerDetached = false
         _followLaunchInProgress.value = false
     }
 
-    private fun onRoomContentChanged(content: WatchPartyContentId?) {
-        _roomContent.value = content
-        routeFollow(content)
+    private fun onRoomFactsChanged(facts: WatchPartyFollowFacts?) {
+        latestRoomFacts = facts
+        val previousContent = _roomContent.value
+        _roomContent.value = facts?.contentId
+        // Follow decisions react to the room's content identity, not to the
+        // position/deviation updates the facts flow also carries.
+        if (facts?.contentId != previousContent) routeFollow(facts)
     }
 
-    private fun routeFollow(content: WatchPartyContentId?) {
+    private fun routeFollow(facts: WatchPartyFollowFacts?) {
         val session = _session.value ?: return
         val bound = if (playerBound) boundContent.value else null
         // playerDetached only meaningful when not bound; bound players are never "detached"
         val detached = !playerBound && playerDetached
-        when (routeWatchPartyFollow(content, bound, detached, session.isDeviatingByChoice())) {
+        when (routeWatchPartyFollow(facts?.contentId, bound, detached, facts?.deviatingByChoice == true)) {
             WatchPartyFollowRoute.NONE -> Unit
             WatchPartyFollowRoute.IN_PLAYER ->
-                _followInPlayer.tryEmit(buildFollowRequest(content!!, session))
+                _followInPlayer.tryEmit(buildFollowRequest(facts!!))
             WatchPartyFollowRoute.VIA_LAUNCH -> {
                 _followLaunchInProgress.value = true
                 session.setFollowing(true)
-                _followViaLaunch.tryEmit(buildFollowRequest(content!!, session))
+                _followViaLaunch.tryEmit(buildFollowRequest(facts!!))
             }
         }
     }
 
-    private fun buildFollowRequest(content: WatchPartyContentId, session: WatchPartySession): WatchPartyFollowRequest {
-        val state = session.latestRoomState()
-        val position = state
-            ?.takeIf { it.contentId.sameContentAs(content) }
-            ?.expectedPositionMs(TraktPlatformClock.nowEpochMs())
-            ?.coerceAtLeast(0L)
-            ?: 0L
-        return WatchPartyFollowRequest(content, position)
-    }
+    private fun buildFollowRequest(facts: WatchPartyFollowFacts): WatchPartyFollowRequest =
+        WatchPartyFollowRequest(
+            facts.contentId,
+            facts.anchor.expectedPositionMs(TraktPlatformClock.nowEpochMs()).coerceAtLeast(0L),
+        )
 
     /** Banner click / manual re-entry: re-route the current room content.
      *  Resets playerDetached so the banner click always triggers VIA_LAUNCH. */
     fun requestManualFollow() {
         playerDetached = false
-        routeFollow(_roomContent.value)
+        routeFollow(latestRoomFacts)
     }
 
     fun onPlayerBoundContent(contentId: WatchPartyContentId?) {

@@ -25,6 +25,19 @@ enum class WatchPartyStateReason { USER, BUFFER_HOLD, AUTO_RESUME, CONTENT_CHANG
 @Serializable
 enum class WatchPartyParticipantStatus { PLAYING, PAUSED, BUFFERING, SELECTING_SOURCE, IDLE }
 
+/**
+ * Position anchor of a playback state: enough data to compute the expected
+ * position at any later wall-clock time.
+ */
+data class WatchPartyPositionAnchor(
+    val positionMs: Long,
+    val atWallClockMs: Long,
+    val isPlaying: Boolean,
+) {
+    fun expectedPositionMs(nowMs: Long): Long =
+        if (isPlaying) positionMs + (nowMs - atWallClockMs) else positionMs
+}
+
 @Serializable
 data class WatchPartyRoomState(
     val contentId: WatchPartyContentId,
@@ -74,8 +87,10 @@ data class WatchPartyRoomState(
         }
     }
 
-    fun expectedPositionMs(nowMs: Long): Long =
-        if (isPlaying) positionMs + (nowMs - atWallClockMs) else positionMs
+    fun positionAnchor(): WatchPartyPositionAnchor =
+        WatchPartyPositionAnchor(positionMs, atWallClockMs, isPlaying)
+
+    fun expectedPositionMs(nowMs: Long): Long = positionAnchor().expectedPositionMs(nowMs)
 }
 
 data class WatchPartyParticipant(
