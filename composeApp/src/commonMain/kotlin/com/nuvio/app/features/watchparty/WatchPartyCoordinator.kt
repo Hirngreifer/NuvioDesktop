@@ -31,29 +31,6 @@ import kotlin.random.Random
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
-data class WatchPartyFollowRequest(
-    val contentId: WatchPartyContentId,
-    val resumePositionMs: Long,
-)
-
-enum class WatchPartyFollowRoute { NONE, IN_PLAYER, VIA_LAUNCH }
-
-internal fun routeWatchPartyFollow(
-    roomContent: WatchPartyContentId?,
-    boundContent: WatchPartyContentId?,
-    playerDetached: Boolean,
-    deviatingByChoice: Boolean = false,
-): WatchPartyFollowRoute = when {
-    roomContent == null -> WatchPartyFollowRoute.NONE
-    deviatingByChoice -> WatchPartyFollowRoute.NONE
-    boundContent != null && roomContent.sameContentAs(boundContent) -> WatchPartyFollowRoute.NONE
-    boundContent != null &&
-        boundContent.metaId == roomContent.metaId &&
-        boundContent.mediaType == roomContent.mediaType -> WatchPartyFollowRoute.IN_PLAYER
-    boundContent == null && playerDetached -> WatchPartyFollowRoute.NONE
-    else -> WatchPartyFollowRoute.VIA_LAUNCH
-}
-
 /**
  * App-wide owner of the watch party session. The player binds/unbinds to the
  * session it exposes; leaving happens only through [leave] (or app exit).
@@ -84,12 +61,10 @@ object WatchPartyCoordinator {
     private val _followViaLaunch = MutableSharedFlow<WatchPartyFollowRequest>(extraBufferCapacity = 8)
     val followViaLaunch: SharedFlow<WatchPartyFollowRequest> = _followViaLaunch.asSharedFlow()
 
-    private val boundContent = MutableStateFlow<WatchPartyContentId?>(null)
-    private var playerBound = false
-    private var playerDetached = false
-    private var latestRoomFacts: WatchPartyFollowFacts? = null
-    // Exposed so the banner can stay hidden while a follow-launch has the
-    // stream picker open — the user is already on their way to the room content.
+    private val followEngine = WatchPartyFollowEngine()
+    // Projection of the engine's launch state; the banner stays hidden while a
+    // follow-launch has the stream picker open — the user is already on their
+    // way to the room content.
     private val _followLaunchInProgress = MutableStateFlow(false)
     val followLaunchInProgress: StateFlow<Boolean> = _followLaunchInProgress.asStateFlow()
     private var factsJob: Job? = null
@@ -144,10 +119,7 @@ object WatchPartyCoordinator {
         start: suspend (WatchPartySession, String) -> String,
     ) {
         if (_session.value != null || !isConfigured) return
-        // A player closed before any session existed leaves playerDetached = true
-        // (onPlayerUnbound flips it unconditionally). A fresh session must start
-        // undetached so the first room content auto-launches (fresh join → VIA_LAUNCH).
-        playerDetached = false
+        interpret(followEngine.onSessionStarted())
         val session = WatchPartySession(
             client = SupabaseWatchPartyClient(WatchPartySupabaseProvider.client, scope),
             scope = scope,
@@ -216,76 +188,62 @@ object WatchPartyCoordinator {
         factsJob?.cancel()
         factsJob = null
         _session.value = null
-        latestRoomFacts = null
-        boundContent.value = null
-        playerBound = false
-        playerDetached = false
-        _followLaunchInProgress.value = false
+        interpret(followEngine.onSessionReset())
+    }
+
+    /**
+     * The single place that acts on follow engine output: the only caller of
+     * setFollowing, the emitter of both follow request flows, and the executor
+     * of the content-reset signal. Content is cleared before the following flip
+     * so the sync engine reaches SELECTING_SOURCE first and setFollowing
+     * re-announces it as IDLE — otherwise the session keeps broadcasting the
+     * last PLAYING/PAUSED status.
+     */
+    private fun interpret(output: WatchPartyFollowEngine.Output) {
+        _followLaunchInProgress.value = output.launchInProgress
+        if (output.clearPlayerContent) _session.value?.onContentChanged(null)
+        output.following?.let { _session.value?.setFollowing(it) }
+        output.followInPlayer?.let { _followInPlayer.tryEmit(it) }
+        output.followViaLaunch?.let { _followViaLaunch.tryEmit(it) }
     }
 
     private fun onRoomFactsChanged(facts: WatchPartyFollowFacts?) {
-        val previousContent = latestRoomFacts?.contentId
-        latestRoomFacts = facts
-        // Follow decisions react to the room's content identity, not to the
-        // position/deviation updates the facts flow also carries.
-        if (facts?.contentId != previousContent) routeFollow(facts)
+        interpret(followEngine.onRoomContentChanged(facts, TraktPlatformClock.nowEpochMs()))
     }
 
-    private fun routeFollow(facts: WatchPartyFollowFacts?) {
-        val session = _session.value ?: return
-        val bound = if (playerBound) boundContent.value else null
-        // playerDetached only meaningful when not bound; bound players are never "detached"
-        val detached = !playerBound && playerDetached
-        when (routeWatchPartyFollow(facts?.contentId, bound, detached, facts?.deviatingByChoice == true)) {
-            WatchPartyFollowRoute.NONE -> Unit
-            WatchPartyFollowRoute.IN_PLAYER ->
-                _followInPlayer.tryEmit(buildFollowRequest(facts!!))
-            WatchPartyFollowRoute.VIA_LAUNCH -> {
-                _followLaunchInProgress.value = true
-                session.setFollowing(true)
-                _followViaLaunch.tryEmit(buildFollowRequest(facts!!))
-            }
-        }
-    }
-
-    private fun buildFollowRequest(facts: WatchPartyFollowFacts): WatchPartyFollowRequest =
-        WatchPartyFollowRequest(
-            facts.contentId,
-            facts.anchor.expectedPositionMs(TraktPlatformClock.nowEpochMs()).coerceAtLeast(0L),
-        )
-
-    /** Banner click / manual re-entry: re-route the current room content.
-     *  Resets playerDetached so the banner click always triggers VIA_LAUNCH. */
+    /** Banner click / manual re-entry: follows the room content even after the player was closed. */
     fun requestManualFollow() {
-        playerDetached = false
-        routeFollow(latestRoomFacts)
+        interpret(followEngine.onManualFollow(TraktPlatformClock.nowEpochMs()))
     }
 
     fun onPlayerBoundContent(contentId: WatchPartyContentId?) {
-        _followLaunchInProgress.value = false
-        playerBound = true
-        playerDetached = false
-        boundContent.value = contentId
-        _session.value?.setFollowing(true)
+        interpret(followEngine.onPlayerBound(contentId))
     }
 
     fun onPlayerUnbound() {
-        playerBound = false
-        // An unbind during a running launch-follow is the old player disposing on the
-        // way to the new content — not the user leaving playback. Marking it detached
-        // would swallow follow routing for content changes in that window.
-        playerDetached = !_followLaunchInProgress.value
-        boundContent.value = null
-        // Clear content first so the engine transitions to SELECTING_SOURCE; then
-        // setFollowing re-announces mappedStatus(SELECTING_SOURCE) = IDLE.
-        // Without this call the session keeps broadcasting the last PLAYING/PAUSED status.
-        _session.value?.onContentChanged(null)
-        _session.value?.setFollowing(_followLaunchInProgress.value)
+        interpret(followEngine.onPlayerUnbound())
     }
 
-    fun markLaunchFollowFinished() {
-        _followLaunchInProgress.value = false
-        if (!playerBound) _session.value?.setFollowing(false)
+    fun onLaunchFailed(reason: WatchPartyLaunchFailureReason) {
+        interpret(followEngine.onLaunchFailed(reason))
+    }
+
+    fun onLaunchAbandoned() {
+        interpret(followEngine.onLaunchAbandoned())
+    }
+
+    fun onRoomMovePromptShown() {
+        interpret(followEngine.onRoomMovePromptShown())
+    }
+
+    fun confirmRoomMove() {
+        interpret(followEngine.onRoomMoveConfirmed())
+        _session.value?.confirmRoomMove()
+    }
+
+    fun declineRoomMove() {
+        _session.value?.declineRoomMove()
+        interpret(followEngine.onRoomMoveDeclined())
     }
 
     suspend fun resolveDisplayName(): String {

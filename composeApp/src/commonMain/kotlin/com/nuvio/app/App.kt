@@ -252,6 +252,7 @@ import com.nuvio.app.features.updater.rememberAppUpdaterController
 import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watchparty.WatchPartyBannerHost
 import com.nuvio.app.features.watchparty.WatchPartyCoordinator
+import com.nuvio.app.features.watchparty.WatchPartyLaunchFailureReason
 import com.nuvio.app.features.watchparty.WatchPartyScreen
 import com.nuvio.app.features.watchprogress.ContinueWatchingItem
 import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
@@ -1715,7 +1716,7 @@ private fun MainAppContent(
                     MetaDetailsRepository.fetch(content.mediaType, content.metaId)
                 }.getOrNull()
                 if (meta == null) {
-                    WatchPartyCoordinator.markLaunchFollowFinished()
+                    WatchPartyCoordinator.onLaunchFailed(WatchPartyLaunchFailureReason.METADATA_UNAVAILABLE)
                     NuvioToastController.show(watchPartyFollowFailedText)
                     return@collect
                 }
@@ -1725,7 +1726,7 @@ private fun MainAppContent(
                     null
                 }
                 if ((content.season != null || content.episode != null) && video == null) {
-                    WatchPartyCoordinator.markLaunchFollowFinished()
+                    WatchPartyCoordinator.onLaunchFailed(WatchPartyLaunchFailureReason.EPISODE_NOT_FOUND)
                     NuvioToastController.show(watchPartyFollowFailedText)
                     return@collect
                 }
@@ -2447,7 +2448,7 @@ private fun MainAppContent(
                     DisposableEffect(route.launchId) {
                         onDispose {
                             if (launch.isWatchPartyFollow && !watchPartyFollowNavigatedToPlayer.value) {
-                                WatchPartyCoordinator.markLaunchFollowFinished()
+                                WatchPartyCoordinator.onLaunchAbandoned()
                             }
                         }
                     }

@@ -19,7 +19,6 @@ import com.nuvio.app.features.streams.StreamsUiState
 import com.nuvio.app.features.trakt.TraktScrobbleItem
 import com.nuvio.app.features.watched.WatchedUiState
 import com.nuvio.app.features.watchparty.WatchPartyContentId
-import com.nuvio.app.features.watchparty.WatchPartySession
 import com.nuvio.app.features.watchparty.WatchPartySessionState
 import com.nuvio.app.features.watchprogress.WatchProgressUiState
 import kotlinx.coroutines.CoroutineScope
@@ -161,7 +160,6 @@ internal class PlayerScreenRuntime(
     var showSourcesPanel by mutableStateOf(false)
     var showEpisodesPanel by mutableStateOf(false)
     var showWatchPartyPanel by mutableStateOf(false)
-    var watchPartySession by mutableStateOf<WatchPartySession?>(null)
     var watchPartySessionState by mutableStateOf(WatchPartySessionState())
     var watchPartyDisplayName by mutableStateOf("")
     var watchPartyToast by mutableStateOf<WatchPartyToastState?>(null)

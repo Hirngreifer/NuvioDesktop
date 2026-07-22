@@ -98,14 +98,12 @@ internal fun PlayerScreenRuntime.leaveWatchParty() {
 
 internal fun PlayerScreenRuntime.confirmWatchPartyRoomMove() {
     watchPartyMoveRoomPrompt = null
-    watchPartySession?.setFollowing(true)
-    watchPartySession?.confirmRoomMove()
+    WatchPartyCoordinator.confirmRoomMove()
 }
 
 internal fun PlayerScreenRuntime.declineWatchPartyRoomMove() {
     watchPartyMoveRoomPrompt = null
-    watchPartySession?.declineRoomMove()
-    watchPartySession?.setFollowing(false)
+    WatchPartyCoordinator.declineRoomMove()
 }
 
 // Command sequences match the local control paths (see togglePlayback / onScrubFinished).
@@ -183,7 +181,7 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
         }
         is WatchPartyEvent.MoveRoomPrompt -> {
             watchPartyMoveRoomPrompt = event.contentId
-            watchPartySession?.setFollowing(false)
+            WatchPartyCoordinator.onRoomMovePromptShown()
         }
     }
 }
@@ -199,7 +197,6 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
     val session by WatchPartyCoordinator.session.collectAsState()
     LaunchedEffect(session) {
         val active = session
-        watchPartySession = active
         if (active == null) {
             watchPartySessionState = WatchPartySessionState()
             return@LaunchedEffect
