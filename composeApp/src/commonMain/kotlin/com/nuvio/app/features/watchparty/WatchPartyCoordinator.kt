@@ -8,17 +8,23 @@ import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.watch_party_guest_name
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.getString
 import kotlin.random.Random
@@ -61,11 +67,16 @@ object WatchPartyCoordinator {
     private val _session = MutableStateFlow<WatchPartySession?>(null)
     val session: StateFlow<WatchPartySession?> = _session.asStateFlow()
 
-    private val _sessionState = MutableStateFlow(WatchPartySessionState())
-    val sessionState: StateFlow<WatchPartySessionState> = _sessionState.asStateFlow()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val sessionState: StateFlow<WatchPartySessionState> = _session
+        .flatMapLatest { it?.state ?: flowOf(WatchPartySessionState()) }
+        .stateIn(scope, SharingStarted.Eagerly, WatchPartySessionState())
 
-    private val _roomContent = MutableStateFlow<WatchPartyContentId?>(null)
-    val roomContent: StateFlow<WatchPartyContentId?> = _roomContent.asStateFlow()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val roomContent: StateFlow<WatchPartyContentId?> = _session
+        .flatMapLatest { it?.followFacts ?: flowOf<WatchPartyFollowFacts?>(null) }
+        .map { it?.contentId }
+        .stateIn(scope, SharingStarted.Eagerly, null)
 
     private val _followInPlayer = MutableSharedFlow<WatchPartyFollowRequest>(extraBufferCapacity = 8)
     val followInPlayer: SharedFlow<WatchPartyFollowRequest> = _followInPlayer.asSharedFlow()
@@ -81,7 +92,7 @@ object WatchPartyCoordinator {
     // stream picker open — the user is already on their way to the room content.
     private val _followLaunchInProgress = MutableStateFlow(false)
     val followLaunchInProgress: StateFlow<Boolean> = _followLaunchInProgress.asStateFlow()
-    private var collectJobs = mutableListOf<Job>()
+    private var factsJob: Job? = null
 
     private val _lastRoomCode = MutableStateFlow<String?>(WatchPartyPreferencesStorage.loadLastRoomCode())
     val lastRoomCode: StateFlow<String?> = _lastRoomCode.asStateFlow()
@@ -144,8 +155,7 @@ object WatchPartyCoordinator {
             actorId = Uuid.random().toString(),
         )
         _session.value = session
-        collectJobs += scope.launch { session.state.collect { _sessionState.value = it } }
-        collectJobs += scope.launch { session.followFacts.collect { onRoomFactsChanged(it) } }
+        factsJob = scope.launch { session.followFacts.collect { onRoomFactsChanged(it) } }
         scope.launch {
             val resolvedName = displayName?.takeIf { it.isNotBlank() } ?: resolveDisplayName()
             runCatching { start(session, resolvedName) }
@@ -203,11 +213,9 @@ object WatchPartyCoordinator {
     }
 
     private fun resetSession() {
-        collectJobs.forEach { it.cancel() }
-        collectJobs.clear()
+        factsJob?.cancel()
+        factsJob = null
         _session.value = null
-        _sessionState.value = WatchPartySessionState()
-        _roomContent.value = null
         latestRoomFacts = null
         boundContent.value = null
         playerBound = false
@@ -216,9 +224,8 @@ object WatchPartyCoordinator {
     }
 
     private fun onRoomFactsChanged(facts: WatchPartyFollowFacts?) {
+        val previousContent = latestRoomFacts?.contentId
         latestRoomFacts = facts
-        val previousContent = _roomContent.value
-        _roomContent.value = facts?.contentId
         // Follow decisions react to the room's content identity, not to the
         // position/deviation updates the facts flow also carries.
         if (facts?.contentId != previousContent) routeFollow(facts)
