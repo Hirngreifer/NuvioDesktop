@@ -12,9 +12,12 @@ import com.nuvio.app.features.watchparty.WatchPartyContentId
 import com.nuvio.app.features.watchparty.WatchPartyCoordinator
 import com.nuvio.app.features.watchparty.WatchPartyEvent
 import com.nuvio.app.features.watchparty.WatchPartyPlaybackSnapshot
-import com.nuvio.app.features.watchparty.WatchPartyPlayerCommand
+import com.nuvio.app.features.watchparty.WatchPartyPlayerBinding
+import com.nuvio.app.features.watchparty.WatchPartyPlayerPort
 import com.nuvio.app.features.watchparty.WatchPartySessionState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 import nuvio.composeapp.generated.resources.Res
@@ -105,21 +108,35 @@ internal fun PlayerScreenRuntime.declineWatchPartyRoomMove() {
     watchPartySession?.setFollowing(false)
 }
 
-internal fun PlayerScreenRuntime.executeWatchPartyCommand(command: WatchPartyPlayerCommand) {
-    // Same sequences the local control paths use (see togglePlayback / onScrubFinished).
-    when (command) {
-        WatchPartyPlayerCommand.Play -> {
-            shouldPlay = true
-            playerController?.play()
+// Command sequences match the local control paths (see togglePlayback / onScrubFinished).
+private class PlayerRuntimeWatchPartyPort(
+    private val runtime: PlayerScreenRuntime,
+) : WatchPartyPlayerPort {
+    override val playbackSnapshots: Flow<WatchPartyPlaybackSnapshot> =
+        snapshotFlow { runtime.playbackSnapshot }.map {
+            WatchPartyPlaybackSnapshot(
+                isPlaying = it.isPlaying,
+                positionMs = it.positionMs,
+                isBuffering = it.isLoading,
+            )
         }
-        WatchPartyPlayerCommand.Pause -> {
-            shouldPlay = false
-            playerController?.pause()
-        }
-        is WatchPartyPlayerCommand.SeekTo -> {
-            playerController?.seekTo(command.positionMs)
-            scheduleProgressSyncAfterSeek()
-        }
+
+    override val currentContent: Flow<WatchPartyContentId?> =
+        snapshotFlow { runtime.currentWatchPartyContentId() }
+
+    override fun play() {
+        runtime.shouldPlay = true
+        runtime.playerController?.play()
+    }
+
+    override fun pause() {
+        runtime.shouldPlay = false
+        runtime.playerController?.pause()
+    }
+
+    override fun seekTo(positionMs: Long) {
+        runtime.playerController?.seekTo(positionMs)
+        runtime.scheduleProgressSyncAfterSeek()
     }
 }
 
@@ -191,23 +208,7 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
             active.state.collect { watchPartySessionState = it }
         }
         launch {
-            active.commands.collect { executeWatchPartyCommand(it) }
-        }
-        launch {
-            snapshotFlow { playbackSnapshot }.collect { snapshot ->
-                active.onPlaybackSnapshot(
-                    WatchPartyPlaybackSnapshot(
-                        isPlaying = snapshot.isPlaying,
-                        positionMs = snapshot.positionMs,
-                        isBuffering = snapshot.isLoading,
-                    ),
-                )
-            }
-        }
-        launch {
             snapshotFlow { currentWatchPartyContentId() }.collect { contentId ->
-                WatchPartyCoordinator.onPlayerBoundContent(contentId)
-                active.onContentChanged(contentId)
                 val prompt = watchPartyContentPrompt
                 if (prompt != null && contentId != null && prompt.sameContentAs(contentId)) {
                     watchPartyContentPrompt = null
@@ -233,9 +234,16 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
     }
 
     DisposableEffect(Unit) {
+        val binding = WatchPartyPlayerBinding(
+            session = WatchPartyCoordinator.session,
+            port = PlayerRuntimeWatchPartyPort(this@BindWatchPartyEffects),
+            scope = scope,
+            onPlayerBoundContent = WatchPartyCoordinator::onPlayerBoundContent,
+            onPlayerUnbound = WatchPartyCoordinator::onPlayerUnbound,
+        )
         onDispose {
             // The session is app-owned: closing the player only unbinds (-> IDLE).
-            WatchPartyCoordinator.onPlayerUnbound()
+            binding.close()
         }
     }
 }
