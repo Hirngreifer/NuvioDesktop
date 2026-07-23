@@ -208,7 +208,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
     val watchPartyToastTextForControls = watchPartyToast?.let { toast ->
         stringResource(toast.messageRes, *toast.args.toTypedArray())
     }.orEmpty()
-    val watchPartyPromptForControls = watchPartyContentPrompt
+    val watchPartyPromptForControls by WatchPartyCoordinator.contentPrompt.collectAsState()
     val playerControlsState = PlayerControlsState(
         title = title,
         episodeText = episodeText,
@@ -410,9 +410,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         watchPartyPromptText = watchPartyPromptForControls?.let { prompt ->
             stringResource(Res.string.watch_party_prompt_title, prompt.displayTitle)
         }.orEmpty(),
-        watchPartyPromptShowEpisodes = watchPartyPromptForControls != null &&
-            watchPartyPromptForControls.metaId == parentMetaId &&
-            isSeries,
+        watchPartyPromptShowEpisodes = watchPartyPromptForControls?.metaId == parentMetaId && isSeries,
         watchPartyPromptShowEpisodesLabel = stringResource(Res.string.watch_party_prompt_show_episodes),
         watchPartyPromptDismissLabel = stringResource(Res.string.watch_party_prompt_dismiss),
         watchPartyMovePromptText = watchPartyMoveRoomPrompt?.let { prompt ->
@@ -801,13 +799,8 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
         "watchPartyCreate" -> createWatchPartyRoom()
         "watchPartyLeave" -> leaveWatchParty()
         "watchPartyJoinPlayback" -> WatchPartyCoordinator.requestManualFollow()
-        "watchPartyPromptEpisodes" -> {
-            watchPartyContentPrompt = null
-        }
-        "watchPartyPromptDismiss" -> {
-            watchPartyDismissedPrompt = watchPartyContentPrompt
-            watchPartyContentPrompt = null
-        }
+        "watchPartyPromptEpisodes" -> WatchPartyCoordinator.acceptContentPrompt()
+        "watchPartyPromptDismiss" -> WatchPartyCoordinator.dismissContentPrompt()
         "watchPartyMoveConfirm" -> confirmWatchPartyRoomMove()
         "watchPartyMoveDecline" -> declineWatchPartyRoomMove()
         "cursorActivity" -> {

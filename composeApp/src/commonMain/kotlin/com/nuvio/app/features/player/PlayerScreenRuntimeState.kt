@@ -164,8 +164,6 @@ internal class PlayerScreenRuntime(
     var watchPartyDisplayName by mutableStateOf("")
     var watchPartyToast by mutableStateOf<WatchPartyToastState?>(null)
     var watchPartyToastJob by mutableStateOf<Job?>(null)
-    var watchPartyContentPrompt by mutableStateOf<WatchPartyContentId?>(null)
-    var watchPartyDismissedPrompt by mutableStateOf<WatchPartyContentId?>(null)
     var watchPartyMoveRoomPrompt by mutableStateOf<WatchPartyContentId?>(null)
     var showSubmitIntroModal by mutableStateOf(false)
     var submitIntroSegmentType by mutableStateOf("intro")

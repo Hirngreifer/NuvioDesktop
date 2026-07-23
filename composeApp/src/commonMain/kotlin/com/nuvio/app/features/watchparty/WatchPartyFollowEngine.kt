@@ -24,6 +24,7 @@ class WatchPartyFollowEngine {
         val following: Boolean? = null,
         val clearPlayerContent: Boolean = false,
         val launchInProgress: Boolean = false,
+        val contentPrompt: WatchPartyContentId? = null,
     )
 
     private sealed interface PlayerAttachment {
@@ -39,15 +40,19 @@ class WatchPartyFollowEngine {
     private var player: PlayerAttachment = PlayerAttachment.Unattached
     private var launchInProgress = false
     private var latestFacts: WatchPartyFollowFacts? = null
+    private var promptContent: WatchPartyContentId? = null
+    private var dismissedPrompt: WatchPartyContentId? = null
 
     fun onPlayerBound(content: WatchPartyContentId?): Output {
         player = PlayerAttachment.Bound(content)
         launchInProgress = false
+        if (content != null && promptContent?.sameContentAs(content) == true) promptContent = null
         return output(following = true)
     }
 
     fun onPlayerUnbound(): Output {
         player = if (launchInProgress) PlayerAttachment.Unattached else PlayerAttachment.Closed
+        promptContent = null
         return output(following = launchInProgress, clearPlayerContent = true)
     }
 
@@ -55,12 +60,38 @@ class WatchPartyFollowEngine {
         val previousContent = latestFacts?.contentId
         latestFacts = facts
         if (facts?.contentId == previousContent) return output()
+        dismissedPrompt = null
         return route(facts, nowMs)
     }
 
     fun onManualFollow(nowMs: Long): Output {
         if (player is PlayerAttachment.Closed) player = PlayerAttachment.Unattached
         return route(latestFacts, nowMs)
+    }
+
+    /**
+     * Protocol fact "the room watches [contentId], the local player does not".
+     * The engine owns the display decision: a dismissed content stays silent
+     * for as long as the room keeps watching it; a signal for different
+     * content clears the suppression, so a later switch back prompts again.
+     */
+    fun onContentPromptSignal(contentId: WatchPartyContentId): Output {
+        if (player !is PlayerAttachment.Bound) return output()
+        dismissedPrompt = dismissedPrompt?.takeIf { contentId.sameContentAs(it) }
+        if (dismissedPrompt == null) promptContent = contentId
+        return output()
+    }
+
+    fun onPromptDismissed(): Output {
+        dismissedPrompt = promptContent
+        promptContent = null
+        return output()
+    }
+
+    /** Prompt answered by opening the episode picker: closes without suppression. */
+    fun onPromptAccepted(): Output {
+        promptContent = null
+        return output()
     }
 
     fun onLaunchFailed(reason: WatchPartyLaunchFailureReason): Output = finishLaunch()
@@ -81,6 +112,8 @@ class WatchPartyFollowEngine {
         if (player is PlayerAttachment.Closed) player = PlayerAttachment.Unattached
         launchInProgress = false
         latestFacts = null
+        promptContent = null
+        dismissedPrompt = null
         return output()
     }
 
@@ -88,6 +121,8 @@ class WatchPartyFollowEngine {
         player = PlayerAttachment.Unattached
         launchInProgress = false
         latestFacts = null
+        promptContent = null
+        dismissedPrompt = null
         return output()
     }
 
@@ -123,5 +158,5 @@ class WatchPartyFollowEngine {
         followViaLaunch: WatchPartyFollowRequest? = null,
         following: Boolean? = null,
         clearPlayerContent: Boolean = false,
-    ) = Output(followInPlayer, followViaLaunch, following, clearPlayerContent, launchInProgress)
+    ) = Output(followInPlayer, followViaLaunch, following, clearPlayerContent, launchInProgress, promptContent)
 }

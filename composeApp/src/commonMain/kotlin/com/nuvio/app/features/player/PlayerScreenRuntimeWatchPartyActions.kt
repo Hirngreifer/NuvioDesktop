@@ -7,7 +7,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
-import co.touchlab.kermit.Logger
 import com.nuvio.app.features.watchparty.WatchPartyContentId
 import com.nuvio.app.features.watchparty.WatchPartyCoordinator
 import com.nuvio.app.features.watchparty.WatchPartyEvent
@@ -28,33 +27,10 @@ import nuvio.composeapp.generated.resources.watch_party_toast_paused
 import nuvio.composeapp.generated.resources.watch_party_toast_resumed
 import nuvio.composeapp.generated.resources.watch_party_toast_seeked
 
-private val watchPartyLog = Logger.withTag("WatchPartyRuntime")
-
 internal data class WatchPartyToastState(
     val messageRes: StringResource,
     val args: List<Any> = emptyList(),
 )
-
-/**
- * Pure function — testable without Compose.
- * Returns true when the prompt for [incoming] should be shown to the user.
- * Suppressed when the user has already dismissed the same content.
- */
-internal fun shouldShowWatchPartyPrompt(
-    incoming: WatchPartyContentId,
-    dismissed: WatchPartyContentId?,
-): Boolean = dismissed == null || !incoming.sameContentAs(dismissed)
-
-/**
- * Pure function — determines the new value of watchPartyDismissedPrompt when a
- * ContentPrompt arrives.  If [incoming] differs from [dismissed], the suppression
- * is cleared (spec: "suppression holds until the room content changes again").
- * When [incoming] matches [dismissed], the suppression remains in place.
- */
-internal fun nextDismissedPrompt(
-    incoming: WatchPartyContentId,
-    dismissed: WatchPartyContentId?,
-): WatchPartyContentId? = if (dismissed != null && !incoming.sameContentAs(dismissed)) null else dismissed
 
 internal fun PlayerScreenRuntime.currentWatchPartyContentId(): WatchPartyContentId? {
     if (parentMetaId.isBlank()) return null
@@ -89,8 +65,6 @@ internal fun PlayerScreenRuntime.joinWatchPartyRoom(code: String) {
 
 internal fun PlayerScreenRuntime.leaveWatchParty() {
     watchPartySessionState = WatchPartySessionState()
-    watchPartyContentPrompt = null
-    watchPartyDismissedPrompt = null
     watchPartyMoveRoomPrompt = null
     watchPartyToast = null
     WatchPartyCoordinator.leave()
@@ -166,19 +140,6 @@ internal fun PlayerScreenRuntime.handleWatchPartyEvent(event: WatchPartyEvent) {
             )
         is WatchPartyEvent.BufferHold ->
             showWatchPartyToast(WatchPartyToastState(Res.string.watch_party_toast_buffering, listOf(event.displayName)))
-        is WatchPartyEvent.ContentPrompt -> {
-            // Diagnostic: a prompt means sameContentAs() failed — log both ids so
-            // mismatches (id form, season/episode, media type) are visible in dev runs.
-            watchPartyLog.i {
-                "Content prompt: room=${event.contentId} local=${currentWatchPartyContentId()}"
-            }
-            // Room content changed away from the dismissed one → suppression ends
-            // (spec: dismiss holds only until the room content changes again).
-            watchPartyDismissedPrompt = nextDismissedPrompt(event.contentId, watchPartyDismissedPrompt)
-            if (shouldShowWatchPartyPrompt(event.contentId, watchPartyDismissedPrompt)) {
-                watchPartyContentPrompt = event.contentId
-            }
-        }
         is WatchPartyEvent.MoveRoomPrompt -> {
             watchPartyMoveRoomPrompt = event.contentId
             WatchPartyCoordinator.onRoomMovePromptShown()
@@ -206,10 +167,6 @@ internal fun PlayerScreenRuntime.BindWatchPartyEffects() {
         }
         launch {
             snapshotFlow { currentWatchPartyContentId() }.collect { contentId ->
-                val prompt = watchPartyContentPrompt
-                if (prompt != null && contentId != null && prompt.sameContentAs(contentId)) {
-                    watchPartyContentPrompt = null
-                }
                 val movePrompt = watchPartyMoveRoomPrompt
                 if (movePrompt != null && (contentId == null || !movePrompt.sameContentAs(contentId))) {
                     watchPartyMoveRoomPrompt = null

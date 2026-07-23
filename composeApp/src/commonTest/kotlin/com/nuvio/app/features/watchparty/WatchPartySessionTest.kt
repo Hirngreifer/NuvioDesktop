@@ -147,9 +147,9 @@ class WatchPartySessionTest {
         val sessionA = WatchPartySession(room.client(), scopeA, { now }, "actor-a", driftTickIntervalMs = 3_600_000L, presenceMinGapMs = 0L, presenceWindowMs = 0L)
         val sessionB = WatchPartySession(room.client(), scopeB, { now }, "actor-b", driftTickIntervalMs = 3_600_000L, presenceMinGapMs = 0L, presenceWindowMs = 0L)
         val commandsB = mutableListOf<WatchPartyPlayerCommand>()
-        val eventsB = mutableListOf<WatchPartyEvent>()
+        val promptSignalsB = mutableListOf<WatchPartyContentId>()
         scopeB.launch { sessionB.commands.collect { commandsB += it } }
-        scopeB.launch { sessionB.events.collect { eventsB += it } }
+        scopeB.launch { sessionB.contentPromptSignals.collect { promptSignalsB += it } }
 
         sessionA.join("ABCD23", "Anna")
         sessionA.onContentChanged(testContent(episode = 2))
@@ -157,8 +157,7 @@ class WatchPartySessionTest {
 
         sessionB.join("ABCD23", "Ben")
         assertTrue(
-            eventsB.filterIsInstance<WatchPartyEvent.ContentPrompt>()
-                .any { it.contentId.sameContentAs(testContent(episode = 2)) },
+            promptSignalsB.any { it.sameContentAs(testContent(episode = 2)) },
             "menu join must surface what the room is watching",
         )
         sessionB.onContentChanged(testContent(episode = 7))

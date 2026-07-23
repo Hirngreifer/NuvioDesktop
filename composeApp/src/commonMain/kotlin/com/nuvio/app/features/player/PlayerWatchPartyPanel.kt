@@ -117,17 +117,16 @@ internal fun PlayerScreenRuntime.RenderWatchPartyOverlays() {
 
     WatchPartyToastOverlay(toast = watchPartyToast)
 
-    val prompt = watchPartyContentPrompt
+    val prompt by WatchPartyCoordinator.contentPrompt.collectAsState()
     WatchPartyContentPromptOverlay(
         prompt = prompt,
-        canShowEpisodes = prompt != null && prompt.metaId == parentMetaId && isSeries,
+        canShowEpisodes = prompt?.metaId == parentMetaId && isSeries,
         onShowEpisodes = {
-            watchPartyContentPrompt = null
+            WatchPartyCoordinator.acceptContentPrompt()
             openEpisodesPanel()
         },
         onDismiss = {
-            watchPartyDismissedPrompt = prompt
-            watchPartyContentPrompt = null
+            WatchPartyCoordinator.dismissContentPrompt()
         },
     )
 

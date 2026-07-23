@@ -67,7 +67,12 @@ object WatchPartyCoordinator {
     // way to the room content.
     private val _followLaunchInProgress = MutableStateFlow(false)
     val followLaunchInProgress: StateFlow<Boolean> = _followLaunchInProgress.asStateFlow()
+    // Projection of the engine's content prompt decision ("the room watches
+    // something else — join in?"); the player overlay renders it as-is.
+    private val _contentPrompt = MutableStateFlow<WatchPartyContentId?>(null)
+    val contentPrompt: StateFlow<WatchPartyContentId?> = _contentPrompt.asStateFlow()
     private var factsJob: Job? = null
+    private var promptSignalsJob: Job? = null
 
     private val _lastRoomCode = MutableStateFlow<String?>(WatchPartyPreferencesStorage.loadLastRoomCode())
     val lastRoomCode: StateFlow<String?> = _lastRoomCode.asStateFlow()
@@ -128,6 +133,9 @@ object WatchPartyCoordinator {
         )
         _session.value = session
         factsJob = scope.launch { session.followFacts.collect { onRoomFactsChanged(it) } }
+        promptSignalsJob = scope.launch {
+            session.contentPromptSignals.collect { interpret(followEngine.onContentPromptSignal(it)) }
+        }
         scope.launch {
             val resolvedName = displayName?.takeIf { it.isNotBlank() } ?: resolveDisplayName()
             runCatching { start(session, resolvedName) }
@@ -187,6 +195,8 @@ object WatchPartyCoordinator {
     private fun resetSession() {
         factsJob?.cancel()
         factsJob = null
+        promptSignalsJob?.cancel()
+        promptSignalsJob = null
         _session.value = null
         interpret(followEngine.onSessionReset())
     }
@@ -201,6 +211,7 @@ object WatchPartyCoordinator {
      */
     private fun interpret(output: WatchPartyFollowEngine.Output) {
         _followLaunchInProgress.value = output.launchInProgress
+        _contentPrompt.value = output.contentPrompt
         if (output.clearPlayerContent) _session.value?.onContentChanged(null)
         output.following?.let { _session.value?.setFollowing(it) }
         output.followInPlayer?.let { _followInPlayer.tryEmit(it) }
@@ -234,6 +245,14 @@ object WatchPartyCoordinator {
 
     fun onRoomMovePromptShown() {
         interpret(followEngine.onRoomMovePromptShown())
+    }
+
+    fun dismissContentPrompt() {
+        interpret(followEngine.onPromptDismissed())
+    }
+
+    fun acceptContentPrompt() {
+        interpret(followEngine.onPromptAccepted())
     }
 
     fun confirmRoomMove() {

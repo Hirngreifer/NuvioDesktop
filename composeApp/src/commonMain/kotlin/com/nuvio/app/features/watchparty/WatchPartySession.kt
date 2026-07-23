@@ -43,7 +43,6 @@ sealed interface WatchPartyEvent {
     data class RemoteResumed(val displayName: String) : WatchPartyEvent
     data class RemoteSeeked(val displayName: String, val positionMs: Long) : WatchPartyEvent
     data class BufferHold(val displayName: String) : WatchPartyEvent
-    data class ContentPrompt(val contentId: WatchPartyContentId) : WatchPartyEvent
     data class MoveRoomPrompt(val contentId: WatchPartyContentId) : WatchPartyEvent
 }
 
@@ -79,6 +78,11 @@ class WatchPartySession(
 
     private val _followFacts = MutableStateFlow<WatchPartyFollowFacts?>(null)
     val followFacts: StateFlow<WatchPartyFollowFacts?> = _followFacts.asStateFlow()
+
+    // Protocol fact "the room watches something else", not a UI event: consumed
+    // by the follow engine, which alone decides whether a prompt is shown.
+    private val _contentPromptSignals = MutableSharedFlow<WatchPartyContentId>(extraBufferCapacity = 64)
+    val contentPromptSignals: SharedFlow<WatchPartyContentId> = _contentPromptSignals.asSharedFlow()
 
     private val collectJobs = mutableListOf<Job>()
     private var displayName: String = ""
@@ -316,7 +320,7 @@ class WatchPartySession(
                 ?: WatchPartyParticipantStatus.IDLE
             sendPresenceThrottled(buildPresencePayload(engineStatus))
         }
-        output.contentPrompt?.let { _events.emit(WatchPartyEvent.ContentPrompt(it)) }
+        output.contentPrompt?.let { _contentPromptSignals.emit(it) }
         output.moveRoomPrompt?.let { _events.emit(WatchPartyEvent.MoveRoomPrompt(it)) }
         _followFacts.value = engine.lastKnownState?.let { state ->
             WatchPartyFollowFacts(
