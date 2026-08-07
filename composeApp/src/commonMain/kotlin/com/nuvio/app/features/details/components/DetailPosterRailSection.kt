@@ -27,6 +27,7 @@ fun DetailPosterRailSection(
     items: List<MetaPreview>,
     watchedKeys: Set<String>,
     modifier: Modifier = Modifier,
+    fullyWatchedSeriesKeys: Set<String> = emptySet(),
     showHeader: Boolean = true,
     headerHorizontalPadding: Dp = 0.dp,
     horizontalScrollPadding: Dp = 0.dp,
@@ -53,7 +54,6 @@ fun DetailPosterRailSection(
                 end = rowEdgePadding,
                 bottom = rowHoverInset,
             ),
-            showHeaderAccent = false,
             key = { item -> item.stableKey() },
         ) { item ->
             HomePosterCard(
@@ -61,6 +61,7 @@ fun DetailPosterRailSection(
                 isWatched = WatchingState.isPosterWatched(
                     watchedKeys = watchedKeys,
                     item = item,
+                    fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
                 ),
                 onClick = onPosterClick?.let { { it(item) } },
                 onLongClick = onPosterLongClick?.let { { it(item) } },

@@ -211,7 +211,7 @@ internal class LinuxComposePlayerController : PlayerEngineController {
         selectSubtitleTrack(trackIndex)
     }
 
-    override fun applySubtitleStyle(style: SubtitleStyleState) {
+    override fun applySubtitleStyle(style: SubtitleStyleState, useLibass: Boolean) {
         withHandle {
             LinuxPlayerBridge.applySubtitleStyle(
                 handle = it,
