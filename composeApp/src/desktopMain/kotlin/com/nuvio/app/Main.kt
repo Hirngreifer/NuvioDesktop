@@ -51,6 +51,7 @@ fun main(args: Array<String>) {
         val wasFullscreenOnLastExit = remember { DesktopWindowModeStorage.loadWasFullscreen() }
         val wasMaximizedOnLastExit = remember { DesktopWindowModeStorage.loadWasMaximized() }
         val savedGeometry = remember { DesktopWindowModeStorage.loadWindowedGeometry() }
+        val restoresMaximizedWindowPlacement = DesktopHostOs.current != DesktopHostOs.MACOS
         val windowState = rememberWindowState(
             width = savedGeometry?.width?.dp ?: 1280.dp,
             height = savedGeometry?.height?.dp ?: 820.dp,
@@ -65,9 +66,10 @@ fun main(args: Array<String>) {
                 wasMaximizedOnLastExit == false && savedGeometry != null -> {
                     WindowPlacement.Floating
                 }
-                else -> {
+                restoresMaximizedWindowPlacement -> {
                     WindowPlacement.Maximized
                 }
+                else -> WindowPlacement.Floating
             },
         )
         val fullscreenController = remember { DesktopAppFullscreenController() }
@@ -109,7 +111,7 @@ fun main(args: Array<String>) {
                 snapshotFlow { Triple(windowState.placement, windowState.position, windowState.size) }
                     .collect { (placement, position, size) ->
                         val isFullscreen = fullscreenController.isFullscreen(window, windowState)
-                        if (!isFullscreen) {
+                        if (!isFullscreen && restoresMaximizedWindowPlacement) {
                             DesktopWindowModeStorage.saveWasMaximized(placement == WindowPlacement.Maximized)
                         }
                         val isWindowed = placement == WindowPlacement.Floating && !isFullscreen
