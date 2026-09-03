@@ -54,6 +54,10 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
     @get:Input
     abstract val watchPartySupabaseAnonKey: Property<String>
 
+    /** Fork: true for rolling dev-latest builds (see upstream-sync.yml). */
+    @get:Input
+    abstract val forkPrereleaseBuild: Property<Boolean>
+
     @get:Input
     abstract val supabaseFallbackUrl: Property<String>
 
@@ -111,6 +115,25 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
                 |object WatchPartySupabaseConfig {
                 |    const val URL = "${watchPartySupabaseUrl.get()}"
                 |    const val ANON_KEY = "${watchPartySupabaseAnonKey.get()}"
+                |}
+                """.trimMargin()
+            )
+        }
+
+        outDir.resolve("com/nuvio/app/core/build").apply {
+            mkdirs()
+            resolve("ForkBuildConfig.kt").writeText(
+                """
+                |package com.nuvio.app.core.build
+                |
+                |/** Fork build facts that upstream's AppVersionConfig does not carry. */
+                |object ForkBuildConfig {
+                |    /**
+                |     * True for rolling dev-latest builds. They keep upstream's (lower) version
+                |     * number but are built from a newer commit than any fork release, so the
+                |     * updater must not offer them stable releases as updates.
+                |     */
+                |    const val PRERELEASE_BUILD = ${forkPrereleaseBuild.get()}
                 |}
                 """.trimMargin()
             )
@@ -608,6 +631,7 @@ val generateRuntimeConfigs = tasks.register<GenerateRuntimeConfigsTask>("generat
     supabaseAnonKey.set(runtimeConfigValue("NUVIO_SUPABASE_ANON_KEY"))
     watchPartySupabaseUrl.set(runtimeConfigValue("NUVIO_WATCHPARTY_SUPABASE_URL"))
     watchPartySupabaseAnonKey.set(runtimeConfigValue("NUVIO_WATCHPARTY_SUPABASE_ANON_KEY"))
+    forkPrereleaseBuild.set(runtimeConfigBoolean("NUVIO_DESKTOP_PRERELEASE", default = false))
     supabaseFallbackUrl.set(runtimeConfigValue("NUVIO_SUPABASE_FALLBACK_URL"))
     sentryDsn.set(runtimeConfigValue("SENTRY_DSN"))
     sentryDesktopDsn.set(runtimeConfigValue("SENTRY_DESKTOP_DSN"))

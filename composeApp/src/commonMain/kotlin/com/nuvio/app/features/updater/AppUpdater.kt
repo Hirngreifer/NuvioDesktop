@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import com.nuvio.app.core.build.AppFeaturePolicy
+import com.nuvio.app.core.build.ForkBuildConfig
 import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.ui.NuvioToastController
 import com.nuvio.app.features.addons.httpRequestRaw
@@ -258,7 +259,10 @@ class AppUpdaterController internal constructor(
             val result = AppUpdaterRepository.getLatestChannelUpdate()
 
             result.onSuccess { update ->
-                val remoteNewer = VersionUtils.isRemoteNewer(update.tag, AppUpdaterPlatform.currentVersionName)
+                // Fork: dev-latest (pre-release) builds are newer than every stable release
+                // despite their lower version number - never nag them about stable releases.
+                val remoteNewer = !ForkBuildConfig.PRERELEASE_BUILD &&
+                    VersionUtils.isRemoteNewer(update.tag, AppUpdaterPlatform.currentVersionName)
                 val ignored = ignoredTag != null && ignoredTag == update.tag
                 val shouldShowDialog = force || (remoteNewer && !ignored)
 

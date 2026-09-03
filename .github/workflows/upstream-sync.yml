@@ -131,6 +131,8 @@ jobs:
           NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
           NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
           NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+          # Marks the build as pre-release so the in-app updater ignores stable releases.
+          NUVIO_DESKTOP_PRERELEASE: "true"
         run: ./gradlew :composeApp:packageReleaseDeb --no-configuration-cache -Pcompose.desktop.packaging.checkJdkVendor=false
 
       - uses: actions/upload-artifact@v7
@@ -179,6 +181,8 @@ jobs:
           NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
           NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
           NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
+          # Marks the build as pre-release so the in-app updater ignores stable releases.
+          NUVIO_DESKTOP_PRERELEASE: "true"
         run: .\gradlew.bat :composeApp:packageReleaseMsi "-Pnuvio.webview2.dir=$env:NUVIO_WEBVIEW2_DIR"
 
       - uses: actions/upload-artifact@v7
