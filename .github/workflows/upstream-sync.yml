@@ -71,8 +71,22 @@ jobs:
             echo "has_new=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # A conflict fails this job -> failure mail; nothing is pushed.
-          git merge --no-edit "upstream/$UPSTREAM_BRANCH"
+          # A conflict fails this job -> failure mail; nothing is pushed. The
+          # conflicting files go into the step summary so the mail is actionable.
+          if ! git merge --no-edit "upstream/$UPSTREAM_BRANCH"; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            {
+              echo "## Upstream merge conflict"
+              echo
+              echo "Resolve locally (git merge upstream/$UPSTREAM_BRANCH), push main, then re-run this workflow."
+              echo
+              echo '```'
+              echo "$conflicts"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Upstream merge conflict in: $(echo "$conflicts" | tr '\n' ' ')"
+            exit 1
+          fi
           echo "has_new=true" >> "$GITHUB_OUTPUT"
           echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           # Staging branch so both build jobs work on the exact same merge.
