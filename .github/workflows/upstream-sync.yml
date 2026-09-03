@@ -112,6 +112,11 @@ jobs:
           java-version: "21"
           cache: gradle
 
+      # Upstream's Linux player bridge (player_bridge.cpp) compiles against system
+      # libmpv, GTK and WebKitGTK; fakeroot is needed by the DEB patch step.
+      - name: Install Linux build dependencies
+        run: bash ./scripts/linux/install-desktop-build-dependencies.sh fakeroot
+
       # generateRuntimeConfigs declares local.properties as a required input;
       # the runtime values themselves come from the env vars below.
       - name: Provide empty local.properties

@@ -736,38 +736,33 @@ val buildMacosPlayerBridge = tasks.register<Exec>("buildMacosPlayerBridge") {
     commandLine(macosPlayerBridgeCommand)
 }
 
-// --- Linux player bridge -----------------------------------------------------
-// The fork keeps its own Linux render path (libmpv software render API into
-// Compose, see LinuxComposePlayerSurface). Upstream's X11/GTK player bridge
-// (player_bridge.cpp) is intentionally not built: it needs libmpv/webkit2gtk
-// dev packages and would overwrite this .so with an incompatible JNI surface.
-// Renders through libmpv's software render API into Compose (no native window,
-// no WebView overlay), so the only build inputs are a C compiler and the JNI
-// headers. libmpv itself is dlopen'ed at runtime.
-val isLinuxHost = !isMacHost && !isWindowsHost
-val linuxPlayerBridgeSourceFile = layout.projectDirectory.file("src/desktopMain/native/linux/player_bridge.c").asFile
-val linuxPlayerBridgeOutputFile = layout.buildDirectory.file("native/linux/libplayer_bridge.so").get().asFile
+// ---- Linux player bridge (system libmpv, X11 "wid" embedding) ----
+// Compiles a single JNI .so against the system libmpv + JDK JNI headers.
+// Requires a C++ toolchain, pkg-config, and libmpv development files on the
+// build host (all provided by the Nix dev shell).
+val isLinuxHost = System.getProperty("os.name").contains("linux", ignoreCase = true)
+val linuxPlayerBridgeSource = layout.projectDirectory.file("src/desktopMain/native/linux/player_bridge.cpp")
+val linuxPlayerBridgeOutput = layout.buildDirectory.file("native/linux/libplayer_bridge.so")
 val linuxPlayerBridgeJavaHome = providers.systemProperty("java.home").get()
-
+val linuxPlayerBridgeSourceFile = linuxPlayerBridgeSource.asFile
+val linuxPlayerBridgeOutputFile = linuxPlayerBridgeOutput.get().asFile
 val buildLinuxPlayerBridge = tasks.register<Exec>("buildLinuxPlayerBridge") {
+    notCompatibleWithConfigurationCache("Builds a host-local player bridge against system libmpv.")
     enabled = isLinuxHost
     inputs.file(linuxPlayerBridgeSourceFile)
     outputs.file(linuxPlayerBridgeOutputFile)
-    val outputFile = linuxPlayerBridgeOutputFile
-    doFirst { outputFile.parentFile.mkdirs() }
+    val src = linuxPlayerBridgeSourceFile.absolutePath
+    val out = linuxPlayerBridgeOutputFile.absolutePath
+    val outParent = linuxPlayerBridgeOutputFile.parentFile
+    val jni = "$linuxPlayerBridgeJavaHome/include"
+    doFirst { outParent.mkdirs() }
     commandLine(
-        "gcc",
-        "-shared",
-        "-fPIC",
-        "-O2",
-        "-Wall",
-        linuxPlayerBridgeSourceFile.absolutePath,
-        "-o",
-        linuxPlayerBridgeOutputFile.absolutePath,
-        "-I$linuxPlayerBridgeJavaHome/include",
-        "-I$linuxPlayerBridgeJavaHome/include/linux",
-        "-ldl",
-        "-lpthread",
+        "bash", "-c",
+        "c++ -std=c++17 -shared -fPIC -O2 " +
+            "-I'$jni' -I'$jni/linux' " +
+            "$(pkg-config --cflags mpv webkit2gtk-4.1 gtk+-3.0 x11 xcomposite xext) " +
+            "'$src' -o '$out' " +
+            "$(pkg-config --libs mpv webkit2gtk-4.1 gtk+-3.0 x11 xcomposite xext) -lpthread",
     )
 }
 
@@ -1021,6 +1016,10 @@ tasks.withType<Jar>().configureEach {
         }
     }
     if (isLinuxHost && name == "desktopJar") {
+        dependsOn(buildLinuxPlayerBridge)
+        from(linuxPlayerBridgeOutput) {
+            into("native/linux")
+        }
         // TorrServer ships as a classpath resource so P2P streaming works from
         // any working directory and in packaged builds (macOS does the same via
         // prepareMacosTorrServerResources; Linux needs no signing pass).
@@ -1074,58 +1073,6 @@ if (isWindowsHost) {
         dependsOn(buildWindowsPlayerBridge, prepareWindowsPlayerRuntime, generateWindowsPlayerRuntimeIndex)
     }
 }
-
-tasks.withType<Jar>().configureEach {
-    if (isLinuxHost && name == "desktopJar") {
-        dependsOn(buildLinuxPlayerBridge)
-        from(linuxPlayerBridgeOutputFile) {
-            into("native/linux")
-        }
-    }
-}
-
-if (isLinuxHost) {
-    val desktopNativePlayerTasks = setOf(
-        "run",
-        "runRelease",
-        "desktopRun",
-        "runDistributable",
-        "runReleaseDistributable",
-        "createDistributable",
-        "createReleaseDistributable",
-        "createRuntimeImage",
-        "package",
-        "packageDistributionForCurrentOS",
-        "packageDeb",
-        "packageUberJarForCurrentOS",
-        "packageReleaseDistributionForCurrentOS",
-        "packageReleaseDeb",
-        "packageReleaseUberJarForCurrentOS",
-    )
-    tasks.matching { it.name in desktopNativePlayerTasks }.configureEach {
-        dependsOn(buildLinuxPlayerBridge)
-    }
-
-    // Standalone player measurement harness (LinuxPlayerPerfHarness.kt):
-    //   ./gradlew :composeApp:runLinuxPlayerPerfHarness -PharnessArgs="<file> --fullscreen"
-    // Working dir is the repo root so LinuxPlayerBridge finds the freshly
-    // built .so under composeApp/build/native/linux.
-    tasks.register<JavaExec>("runLinuxPlayerPerfHarness") {
-        group = "run"
-        description = "Plays one file/URL through the Linux player render path for perf measurements"
-        dependsOn(buildLinuxPlayerBridge, tasks.named("desktopMainClasses"))
-        mainClass.set("com.nuvio.app.features.player.desktop.LinuxPlayerPerfHarnessKt")
-        classpath = files(
-            kotlin.targets.getByName("desktop").compilations.getByName("main").output.allOutputs,
-            configurations.getByName("desktopRuntimeClasspath"),
-        )
-        workingDir = rootProject.projectDir
-        argumentProviders.add {
-            (providers.gradleProperty("harnessArgs").orNull ?: "").split(" ").filter(String::isNotBlank)
-        }
-    }
-}
-// -----------------------------------------------------------------------------
 
 tasks.withType<KotlinCompilationTask<*>>().configureEach {
     dependsOn(generateRuntimeConfigs)

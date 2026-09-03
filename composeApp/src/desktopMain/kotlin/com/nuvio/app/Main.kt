@@ -46,9 +46,11 @@ private const val MacosDarkAquaAppearance = "NSAppearanceNameDarkAqua"
 
 fun main(args: Array<String>) {
     com.nuvio.app.core.logging.DesktopFileLogging.install()
-    // Fork: no early GTK init on Linux. Upstream needs it for its GTK/X11 player
-    // bridge; the fork renders Linux video through LinuxComposePlayerSurface and
-    // does not load NativePlayerBridge on Linux at all.
+    // On Linux, initialize GTK BEFORE AWT/Compose/Skia to prevent GdkDisplayManager
+    // type registration conflict (Skiko partially loads GDK without full GTK init).
+    if (System.getProperty("os.name", "").lowercase().contains("linux")) {
+        runCatching { NativePlayerBridge.initGtkEarly() }
+    }
     applyDesktopRendererPreference()
     SentryInitializer.start()
     configureDesktopQuickJsLibrary()

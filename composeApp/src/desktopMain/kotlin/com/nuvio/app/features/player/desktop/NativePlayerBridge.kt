@@ -331,9 +331,9 @@ internal object NativePlayerBridge {
 }
 
 internal fun preloadNativePlayerBridgeAsync() {
-    // Fork: Linux uses LinuxComposePlayerSurface/LinuxPlayerBridge, not this bridge.
     if (DesktopHostOs.current == DesktopHostOs.MACOS ||
-        DesktopHostOs.current == DesktopHostOs.WINDOWS
+        DesktopHostOs.current == DesktopHostOs.WINDOWS ||
+        DesktopHostOs.current == DesktopHostOs.LINUX
     ) {
         runCatching {
             NativePlayerBridge.preloadAsync()

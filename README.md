@@ -1,6 +1,6 @@
 > [!NOTE]
 > **This is an unofficial fork** of [NuvioMedia/NuvioDesktop](https://github.com/NuvioMedia/NuvioDesktop) and is not affiliated with the official Nuvio project.
-> It adds Linux in-app playback and a watch-party feature, and is automatically synced with upstream daily.
+> It adds a watch-party feature and is automatically synced with upstream daily.
 >
 > **Downloads:** grab the rolling [`dev-latest` release](https://github.com/Hirngreifer/NuvioDesktop/releases/tag/dev-latest) (Windows MSI, Linux DEB). For official releases, see the [upstream repository](https://github.com/NuvioMedia/NuvioDesktop/releases/latest).
 
