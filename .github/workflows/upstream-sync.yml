@@ -109,7 +109,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "17" # jpackage 21+ drops the "-1" DEB release suffix upstream's patch step expects
           cache: gradle
 
       # Upstream's Linux player bridge (player_bridge.cpp) compiles against system
@@ -131,7 +131,7 @@ jobs:
           NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
           NUVIO_WATCHPARTY_SUPABASE_URL: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_URL }}
           NUVIO_WATCHPARTY_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_WATCHPARTY_SUPABASE_ANON_KEY }}
-        run: ./gradlew :composeApp:packageReleaseDeb
+        run: ./gradlew :composeApp:packageReleaseDeb --no-configuration-cache -Pcompose.desktop.packaging.checkJdkVendor=false
 
       - uses: actions/upload-artifact@v7
         with:
