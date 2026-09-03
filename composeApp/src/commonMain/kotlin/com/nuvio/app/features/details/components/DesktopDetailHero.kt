@@ -11,17 +11,25 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CheckCircleOutline
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,24 +37,35 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.ui.NuvioAsyncImage as AsyncImage
 import com.nuvio.app.core.ui.NuvioDesktopImageScaling
 import com.nuvio.app.core.ui.NuvioTokens
+import com.nuvio.app.core.ui.DesktopBackdropVerticalBias
+import com.nuvio.app.core.ui.StandardDesktopViewportAspectRatio
 import com.nuvio.app.core.ui.FullscreenActionButton
+import com.nuvio.app.core.ui.desktopPageHorizontalPaddingForWidth
 import com.nuvio.app.core.ui.fullscreenActionHorizontalInsetForWidth
+import com.nuvio.app.core.ui.expandingWideArtworkWidthDp
 import com.nuvio.app.core.ui.isFullscreenActionSupported
+import com.nuvio.app.core.ui.WideDesktopViewportAspectRatio
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.formatRuntimeForDisplay
+import com.nuvio.app.features.tmdb.originalTmdbImageUrl
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.detail_logo_content_description
 import nuvio.composeapp.generated.resources.hero_add_to_library
@@ -56,71 +75,77 @@ import nuvio.composeapp.generated.resources.hero_remove_from_library
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
-fun DesktopDetailHero(
+fun DesktopDetailBackdrop(
     meta: MetaDetails,
-    playButtonLabel: String,
-    isSaved: Boolean,
-    isWatched: Boolean,
-    scrollOffset: () -> Int,
-    onHeightChanged: (Int) -> Unit,
+    viewportHeight: Dp,
     heroTrailerSourceUrl: String?,
     heroTrailerSourceAudioUrl: String?,
     heroTrailerReady: Boolean,
     heroTrailerPlayWhenReady: Boolean,
     heroTrailerMuted: Boolean,
     heroGradientColor: Color? = null,
+    blurBackdrop: Boolean = false,
     onBackdropLoaded: (Painter) -> Unit = {},
     onHeroTrailerReady: () -> Unit,
     onHeroTrailerEnded: () -> Unit,
     onHeroTrailerError: () -> Unit,
-    onPlayClick: () -> Unit,
-    onPlayLongClick: (() -> Unit)?,
-    onWatchedClick: () -> Unit,
-    onSaveClick: () -> Unit,
-    onSaveLongClick: (() -> Unit)?,
+    modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val bottomGradientColor = heroGradientColor ?: colorScheme.background
     val sideGradientColor = heroGradientColor ?: colorScheme.background
-    val space = NuvioTokens.Space
     val opacity = NuvioTokens.Opacity
     val trailerAlpha by animateFloatAsState(
         targetValue = if (heroTrailerReady) 1f else 0f,
         animationSpec = tween(durationMillis = NuvioTokens.Motion.sheetEnterMillis),
         label = "desktop_detail_hero_trailer_alpha",
     )
-    var logoLoadError by remember(meta.id, meta.logo) {
-        mutableStateOf(false)
-    }
-    val logoUrl = meta.logo?.takeIf { it.isNotBlank() }
-
+    val gradientIntensity by animateFloatAsState(
+        targetValue = if (heroTrailerReady) 0.3f else 1f,
+        animationSpec = tween(durationMillis = NuvioTokens.Motion.sheetEnterMillis),
+        label = "desktop_detail_hero_gradient_intensity",
+    )
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(660.dp)
-            .graphicsLayer { clip = true }
-            .onSizeChanged { onHeightChanged(it.height) },
+        modifier = modifier
+            .fillMaxSize()
+            .background(sideGradientColor),
     ) {
-        val actionHorizontalInset = fullscreenActionHorizontalInsetForWidth(maxWidth.value)
+        val aspectRatio = maxWidth.value / viewportHeight.value
+        val useWideArtworkFrame = aspectRatio > StandardDesktopViewportAspectRatio
+        val cropSideBackdrop = aspectRatio > WideDesktopViewportAspectRatio
+        val backdropWidth = if (useWideArtworkFrame) {
+            expandingWideArtworkWidthDp(maxWidth.value, viewportHeight.value).dp
+        } else {
+            maxWidth
+        }
+        val backdropModifier = Modifier
+            .align(Alignment.CenterEnd)
+            .width(backdropWidth)
+            .fillMaxHeight()
+        val artworkModifier = if (blurBackdrop) backdropModifier.blur(30.dp) else backdropModifier
+        val bottomSpreadStrength = ((21f / 9f - aspectRatio) / (5f / 9f)).coerceIn(0f, 1f)
+        val baseSideFade = Brush.horizontalGradient(
+            colorStops = arrayOf(
+                0.00f to sideGradientColor,
+                0.12f to sideGradientColor.copy(alpha = 0.98f * gradientIntensity),
+                0.34f to sideGradientColor.copy(alpha = opacity.overlayHeavy * gradientIntensity),
+                0.62f to sideGradientColor.copy(alpha = opacity.overlayLight * gradientIntensity),
+                0.86f to sideGradientColor.copy(alpha = opacity.subtle * gradientIntensity),
+                1.00f to Color.Transparent,
+            ),
+        )
         val imageUrl = meta.background ?: meta.poster
         if (imageUrl != null) {
             AsyncImage(
-                model = imageUrl,
+                model = originalTmdbImageUrl(imageUrl),
                 contentDescription = meta.name,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationY = scrollOffset() * 0.38f
-                        scaleX = 1.04f
-                        scaleY = 1.04f
-                    },
-                alignment = Alignment.Center,
-                contentScale = ContentScale.Crop,
+                modifier = artworkModifier,
+                alignment = BiasAlignment(0f, DesktopBackdropVerticalBias),
+                contentScale = if (useWideArtworkFrame && !cropSideBackdrop) ContentScale.Fit else ContentScale.Crop,
                 desktopImageScaling = NuvioDesktopImageScaling.Disabled,
                 onSuccess = { state -> onBackdropLoaded(state.painter) },
             )
         } else {
-            DesktopStripePlaceholder(modifier = Modifier.fillMaxSize())
+            DesktopStripePlaceholder(modifier = backdropModifier)
         }
 
         if (heroTrailerSourceUrl != null) {
@@ -129,14 +154,8 @@ fun DesktopDetailHero(
                 sourceAudioUrl = heroTrailerSourceAudioUrl,
                 playWhenReady = heroTrailerPlayWhenReady,
                 muted = heroTrailerMuted,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        alpha = trailerAlpha
-                        translationY = scrollOffset() * 0.38f
-                        scaleX = 1.04f
-                        scaleY = 1.04f
-                    },
+                fillFrame = true,
+                modifier = artworkModifier.graphicsLayer { alpha = trailerAlpha },
                 onReady = onHeroTrailerReady,
                 onEnded = onHeroTrailerEnded,
                 onError = onHeroTrailerError,
@@ -144,41 +163,71 @@ fun DesktopDetailHero(
         }
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
+            modifier = backdropModifier
+                .drawWithCache {
+                    val bottomSpread = Brush.radialGradient(
                         colorStops = arrayOf(
-                            0.00f to Color.Transparent,
-                            0.14f to bottomGradientColor.copy(alpha = opacity.subtle),
-                            0.38f to bottomGradientColor.copy(alpha = opacity.overlayLight),
-                            0.66f to bottomGradientColor.copy(alpha = opacity.overlayHeavy),
-                            0.88f to bottomGradientColor.copy(alpha = 0.98f),
-                            1.00f to bottomGradientColor,
-                        ),
-                    ),
-                ),
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colorStops = arrayOf(
-                            0.00f to sideGradientColor.copy(alpha = opacity.overlayHeavy),
-                            0.32f to sideGradientColor.copy(alpha = opacity.medium),
-                            0.62f to sideGradientColor.copy(alpha = opacity.subtle),
+                            0.00f to sideGradientColor.copy(alpha = 0.12f * gradientIntensity * bottomSpreadStrength),
+                            0.55f to sideGradientColor.copy(alpha = 0.12f * gradientIntensity * bottomSpreadStrength),
                             1.00f to Color.Transparent,
                         ),
-                    ),
-                ),
+                        center = Offset(0f, size.height * 1.15f),
+                        radius = size.width * 0.72f,
+                    )
+                    onDrawBehind {
+                        drawRect(baseSideFade)
+                        if (bottomSpreadStrength > 0f) drawRect(bottomSpread)
+                    }
+                },
         )
+    }
+}
+
+@Composable
+fun DesktopDetailHero(
+    meta: MetaDetails,
+    playButtonLabel: String,
+    isSaved: Boolean,
+    isWatched: Boolean,
+    onHeightChanged: (Int) -> Unit,
+    heroTrailerSourceUrl: String?,
+    heroTrailerReady: Boolean,
+    heroTrailerMuted: Boolean,
+    onHeroTrailerMuteToggle: () -> Unit,
+    onPlayClick: () -> Unit,
+    onPlayLongClick: (() -> Unit)?,
+    onWatchedClick: () -> Unit,
+    onSaveClick: () -> Unit,
+    onSaveLongClick: (() -> Unit)?,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val space = NuvioTokens.Space
+    val trailerAlpha by animateFloatAsState(
+        targetValue = if (heroTrailerReady) 1f else 0f,
+        animationSpec = tween(durationMillis = NuvioTokens.Motion.sheetEnterMillis),
+        label = "desktop_detail_hero_controls_alpha",
+    )
+    var logoLoadError by remember(meta.id, meta.logo) { mutableStateOf(false) }
+    val logoUrl = meta.logo?.takeIf { it.isNotBlank() }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(660.dp)
+            .onSizeChanged { onHeightChanged(it.height) },
+    ) {
+        val actionHorizontalInset = fullscreenActionHorizontalInsetForWidth(maxWidth.value)
+        val pageHorizontalPadding = desktopPageHorizontalPaddingForWidth(maxWidth.value)
 
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .widthIn(max = 760.dp)
-                .padding(start = space.s56, end = space.s32, bottom = space.s40),
+                .padding(
+                    start = pageHorizontalPadding,
+                    end = space.s32,
+                    bottom = space.s40,
+                ),
         ) {
             if (logoUrl != null && !logoLoadError) {
                 AsyncImage(
@@ -281,6 +330,39 @@ fun DesktopDetailHero(
                 onPlayClick = onPlayClick,
                 onPlayLongClick = onPlayLongClick,
             )
+        }
+
+        if (heroTrailerSourceUrl != null) {
+            Surface(
+                onClick = onHeroTrailerMuteToggle,
+                enabled = heroTrailerReady,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(
+                        top = space.s32,
+                        end = actionHorizontalInset + if (isFullscreenActionSupported) 60.dp else 0.dp,
+                    )
+                    .size(48.dp)
+                    .graphicsLayer { alpha = trailerAlpha },
+                shape = CircleShape,
+                color = colorScheme.surfaceVariant.copy(alpha = 0.82f),
+                contentColor = colorScheme.onSurface,
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (heroTrailerMuted) {
+                            Icons.AutoMirrored.Rounded.VolumeOff
+                        } else {
+                            Icons.AutoMirrored.Rounded.VolumeUp
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
         }
 
         if (isFullscreenActionSupported) {

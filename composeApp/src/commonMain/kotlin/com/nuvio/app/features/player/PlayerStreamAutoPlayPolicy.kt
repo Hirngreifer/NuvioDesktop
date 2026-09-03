@@ -43,7 +43,8 @@ internal class PlayerStreamAutoPlayPolicy(
 
     val bingeGroupOnlyManualMode: Boolean =
         shouldAutoSelectInManualMode &&
-            !settings.streamAutoPlayNextEpisodeEnabled &&
+            (!settings.streamAutoPlayNextEpisodeEnabled ||
+                !settings.streamAutoPlayNextEpisodeFallbackEnabled) &&
             settings.streamAutoPlayPreferBingeGroup
 
     /** Plain MANUAL without any auto-next/binge-group exception. */
