@@ -954,6 +954,21 @@ internal class NativePlayerController(
             )
         }
 
+    override fun applyAudioLanguagePreferences(languages: List<String>) {
+        val preferredLanguages = languages
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .map(String::lowercase)
+        if (preferredLanguages.isEmpty()) return
+        val trackIndex = getAudioTracks().indexOfFirst { track ->
+            val language = track.language?.lowercase() ?: return@indexOfFirst false
+            preferredLanguages.any { preferred ->
+                language == preferred || language.startsWith("$preferred-")
+            }
+        }
+        if (trackIndex >= 0) selectAudioTrack(trackIndex)
+    }
+
     override fun selectAudioTrack(index: Int) {
         val current = handle.takeIf { it != 0L } ?: return
         val tracks = decodeTracks { NativePlayerBridge.audioTracksJson(it) }

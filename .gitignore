@@ -33,6 +33,7 @@ AGENTS.md
 .superpowers/
 
 PERFORMANCE_FINDINGS.md
+scripts
 
 # Local MPVKit iOS build environment (sparse APFS image, see MPVKit docs)
 .mpvkit-build.sparseimage
