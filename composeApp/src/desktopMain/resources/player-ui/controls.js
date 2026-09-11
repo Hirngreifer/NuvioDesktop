@@ -3155,6 +3155,7 @@ volumeSlider.addEventListener("input", event => {
     preMuteVolumeLevel = nextLevel;
   }
   syncVolumeControl();
+  showPlayerToast(volumeToastLabel());
   send("volumeChange", nextLevel);
 });
 

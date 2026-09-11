@@ -327,6 +327,7 @@ fun StreamsScreen(
                 modifier = Modifier
                     .size(40.dp),
                 containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.45f),
+                showContainerOnDesktop = true,
                 contentColor = MaterialTheme.colorScheme.onBackground,
             )
 
